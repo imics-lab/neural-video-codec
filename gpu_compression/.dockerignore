@@ -1,0 +1,28 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Output artifacts (should be bind-mounted, not baked in)
+outputs/
+
+# Large media files (videos are bind-mounted at runtime)
+*.mp4
+*.avi
+*.mkv
+*.mov
+video.zip
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore

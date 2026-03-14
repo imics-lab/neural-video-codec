@@ -1,0 +1,57 @@
+# =============================================================================
+# Docker Compose for local PC testing (Windows/Linux x86_64)
+# =============================================================================
+# Verifies the Docker build: packages install, DCVC extensions compile.
+# Uses CUDA 12.4 toolkit + PyTorch cu126 (confirmed working).
+#
+# Usage:
+#   Build and test:  docker compose -f docker-compose-test.yml up --build
+#   Clean up:        docker compose -f docker-compose-test.yml down
+# =============================================================================
+
+services:
+  test:
+    container_name: neural-video-codec-test
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # CUDA 12.4 devel image (x86_64)
+        BASE_IMAGE: nvidia/cuda:12.4.1-devel-ubuntu22.04
+        # Install PyTorch cu126 via pip
+        INSTALL_PYTORCH: "true"
+        PYTORCH_INDEX_URL: "https://download.pytorch.org/whl/cu126"
+        # Compile for common PC GPU architectures
+        TORCH_CUDA_ARCH_LIST: "7.0;7.5;8.0;8.6;8.9;9.0"
+
+    image: neural-video-codec-test:latest
+
+    # Grant GPU access for verification
+    runtime: nvidia
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
+
+    # Run the verification script and exit
+    entrypoint: ["python", "/app/verify_install.py"]
+
+    restart: "no"
+
+    shm_size: '2g'
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"

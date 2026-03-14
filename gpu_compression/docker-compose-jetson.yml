@@ -1,0 +1,122 @@
+# =============================================================================
+# Docker Compose for neural-video-codec on NVIDIA Jetson
+# =============================================================================
+# This runs as a SEPARATE container from BioCoder-Edge.
+# It compresses a video using the ROI-aware DCVC neural codec pipeline.
+#
+# Prerequisites:
+#   - NVIDIA Docker runtime installed (nvidia-docker2)
+#   - NVIDIA Container Toolkit configured
+#   - JetPack SDK installed on host (R36.x)
+#   - Model files in gpu_based_compression/models/
+#   - Input video in gpu_based_compression/ directory
+#
+# Usage:
+#   Build and start: docker compose -f docker-compose-jetson.yml up --build -d
+#   View logs:       docker compose -f docker-compose-jetson.yml logs -f
+#   Stop:            docker compose -f docker-compose-jetson.yml down
+#   Stop & clean:    docker compose -f docker-compose-jetson.yml down -v
+# =============================================================================
+
+services:
+  neural-video-codec:
+    # Separate container name — does NOT conflict with biocoder-edge-gpu
+    container_name: neural-video-codec-gpu
+
+    # Build configuration
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Bare CUDA 12.4 devel image — works on both x86_64 and ARM64 (Jetson)
+        # DCVC CUDA extension requires CUDA toolkit 12.4+ to compile
+        BASE_IMAGE: nvidia/cuda:12.4.1-devel-ubuntu22.04
+        # Install PyTorch cu126 via pip
+        INSTALL_PYTORCH: "true"
+        PYTORCH_INDEX_URL: "https://download.pytorch.org/whl/cu126"
+        # Jetson Orin = 8.7, Jetson Xavier = 7.2
+        TORCH_CUDA_ARCH_LIST: "8.7"
+
+    # Image name after building
+    image: neural-video-codec-gpu:latest
+
+    # Restart policy — run once and stop (not a long-running service)
+    restart: "no"
+
+    # Privileged mode for full device access on Jetson
+    privileged: true
+
+    # Runtime configuration for NVIDIA GPU
+    runtime: nvidia
+
+    # Volume mappings
+    volumes:
+      # Model weights (read-only) — must exist on host before running
+      - ./models:/app/models:ro
+
+      # Pipeline config (read-only)
+      - ./configs:/app/configs:ro
+
+      # Input videos — place your .mp4 files here
+      - ./:/app/input:ro
+
+      # Output directory — compressed archives are written here
+      - ./outputs:/app/outputs
+
+      # Mount host timezone for local time
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+    # Override default CMD — specify input video and output path
+    command:
+      - "input/video.mp4"
+      - "--config"
+      - "configs/compression.yaml"
+      - "--output"
+      - "outputs/compressed.zip"
+
+    # Environment variables
+    environment:
+      # Prevent CUDA memory allocation errors on Jetson
+      - PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
+
+      # Python environment
+      - PYTHONUNBUFFERED=1
+
+      # NVIDIA GPU configuration
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+      # CUDA device
+      - CUDA_VISIBLE_DEVICES=0
+
+    # Shared memory size — needed for PyTorch on Jetson
+    shm_size: '2g'
+
+    # Deploy configuration for GPU resource reservation
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+
+    # Security options
+    security_opt:
+      - seccomp:unconfined
+
+    # Network mode
+    network_mode: bridge
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Networks
+networks:
+  default:
+    driver: bridge
