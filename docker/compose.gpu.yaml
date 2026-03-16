@@ -1,0 +1,41 @@
+services:
+  pipeline-gpu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: edge-roi-gpu
+    working_dir: /app
+    gpus: all
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "bash", "docker/run_pipeline.sh" ]
+
+  compression-gpu:
+    profiles: [ "stage-tools" ]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: edge-roi-gpu
+    working_dir: /app
+    gpus: all
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "python", "run_compression.py", "video.mp4", "--config", "configs/gpu/compression.yaml", "--output", "outputs/video.zip" ]
+
+  decompression-gpu:
+    profiles: [ "stage-tools" ]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: edge-roi-gpu
+    working_dir: /app
+    gpus: all
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "python", "run_decompression.py", "outputs/video.zip", "--config", "configs/gpu/decompression.yaml", "--output", "outputs/video_reconstructed.mp4" ]

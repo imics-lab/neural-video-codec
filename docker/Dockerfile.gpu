@@ -1,0 +1,80 @@
+ARG CUDA_IMAGE_TAG=12.4.1-cudnn-devel-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:${CUDA_IMAGE_TAG}
+ARG TORCH_WHL_INDEX=https://download.pytorch.org/whl/cu126
+ARG TORCH_VERSION=2.10.0+cu126
+ARG TORCHVISION_VERSION=0.25.0+cu126
+FROM ${BASE_IMAGE}
+ARG TORCH_WHL_INDEX=https://download.pytorch.org/whl/cu126
+ARG TORCH_VERSION=2.10.0+cu126
+ARG TORCHVISION_VERSION=0.25.0+cu126
+
+ENV DEBIAN_FRONTEND=noninteractive \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONUNBUFFERED=1 \
+  PIP_NO_CACHE_DIR=1 \
+  TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" \
+  YOLO_CONFIG_DIR=/tmp/Ultralytics \
+  TORCH_WHL_INDEX=${TORCH_WHL_INDEX}
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  python3 \
+  python3-pip \
+  python3-venv \
+  python3-dev \
+  build-essential \
+  gcc-12 \
+  g++-12 \
+  ninja-build \
+  git \
+  libglib2.0-0 \
+  libgl1 \
+  libsm6 \
+  libxext6 \
+  libxrender1 \
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -sf /usr/bin/python3 /usr/bin/python
+
+RUN python3 -m venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+ENV CC=/usr/bin/gcc-12
+ENV CXX=/usr/bin/g++-12
+ENV CUDAHOSTCXX=/usr/bin/g++-12
+
+COPY . /app
+
+RUN python -m pip install --upgrade pip setuptools==82.0.0 wheel==0.46.3 && \
+  if [ -z "${TORCH_WHL_INDEX}" ]; then echo "ERROR: TORCH_WHL_INDEX is empty"; exit 1; fi && \
+  python -m pip install --index-url "${TORCH_WHL_INDEX}" "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" && \
+  python -m pip install -r /app/docker/requirements.gpu.txt
+
+RUN python -m pip install --no-build-isolation /app/DCVC/src/cpp
+
+ARG BUILD_INFERENCE_EXT=1
+ARG REQUIRE_INFERENCE_EXT=1
+RUN if [ "$BUILD_INFERENCE_EXT" = "1" ]; then \
+  echo "Attempting DCVC CUDA inference extension build..."; \
+  if python -m pip install -v --no-build-isolation /app/DCVC/src/layers/extensions/inference > /tmp/inference_ext_build.log 2>&1 && \
+  python -c "import torch, inference_extensions_cuda"; then \
+  echo "DCVC CUDA inference extension build succeeded."; \
+  else \
+  if [ "$REQUIRE_INFERENCE_EXT" = "1" ]; then \
+  echo "ERROR: DCVC CUDA inference extension build failed and REQUIRE_INFERENCE_EXT=1." >&2; \
+  echo "----- inference extension build log (tail) -----" >&2; \
+  tail -n 200 /tmp/inference_ext_build.log >&2 || true; \
+  echo "----- end build log -----" >&2; \
+  exit 1; \
+  else \
+  echo "WARNING: DCVC CUDA inference extension build failed; continuing with PyTorch kernel fallback." >&2; \
+  echo "----- inference extension build log (tail) -----" >&2; \
+  tail -n 200 /tmp/inference_ext_build.log >&2 || true; \
+  echo "----- end build log -----" >&2; \
+  fi; \
+  fi; \
+  else \
+  echo "Skipping inference extension build (BUILD_INFERENCE_EXT=${BUILD_INFERENCE_EXT})"; \
+  fi
+
+CMD ["python", "run_compression.py", "--help"]

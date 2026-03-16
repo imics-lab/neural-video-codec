@@ -1,0 +1,32 @@
+decompression:
+  codec: "mp4v"
+  mask_source: "roi_detection"
+
+  roi_temporal_stabilize: true
+  roi_temporal_alpha_still: 0.70
+  roi_temporal_alpha_motion: 0.92
+  roi_blend_edge_px: 2
+  roi_temporal_mask_dilate: 1
+  roi_temporal_overlap_only: true
+
+  # Local DCVC paths (used to override archive metadata paths when needed).
+  dcvc:
+    repo_dir: "DCVC"
+    model_i: "models/cvpr2025_image.pth.tar"
+    model_p: "models/cvpr2025_video.pth.tar"
+    use_cuda: true
+    cuda_idx: 0
+    force_zero_thres: null
+
+  interpolate:
+    enable: true
+    model: "amt-s"
+    weights_path: "models/amt-s.pth"
+    # Local AMT repository path.
+    repo_dir: "_third_party_amt"
+    device: "cuda"
+    fp16: true
+    pad_to: 16
+    batch_size: 8
+    crop_margin: 8
+    max_crop_side: 768
