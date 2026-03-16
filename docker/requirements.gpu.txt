@@ -39,3 +39,6 @@ ultralytics
 ultralytics-thop
 urllib3
 wheel
+loguru
+omegaconf
+tqdm
