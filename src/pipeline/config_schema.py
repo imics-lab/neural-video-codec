@@ -307,3 +307,62 @@ def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = No
 
     if errors:
         raise ValueError("Invalid pipeline config:\n- " + "\n- ".join(errors))
+
+
+def validate_upscaling_config(cfg: Dict[str, Any], root_dir: Optional[Path] = None) -> None:
+    """
+    Validate runtime-critical fields for the upscaling config. Raises ValueError on any issue.
+    """
+    errors: list[str] = []
+    if not isinstance(cfg, dict):
+        raise TypeError("Upscaling config root must be an object")
+
+    root = (root_dir or Path.cwd()).resolve()
+
+    # device — GPU-only enforcement (no cpu/mps)
+    device = cfg.get("device")
+    if device is None:
+        errors.append("device is required")
+    elif isinstance(device, str):
+        s = device.strip().lower()
+        if s in {"cpu", "mps"}:
+            errors.append("Strict GPU runtime forbids device set to cpu or mps")
+        elif not s:
+            errors.append("device must be a non-empty string")
+    else:
+        errors.append("device must be a string (e.g. 'cuda' or 'cuda:0')")
+
+    # scale — must be int in {1, 2, 4}
+    scale = cfg.get("scale")
+    if scale is None:
+        errors.append("scale is required")
+    elif not isinstance(scale, int) or scale not in {1, 2, 4}:
+        errors.append("scale must be an integer in {1, 2, 4}")
+
+    # model section
+    model_cfg = _as_dict(cfg.get("model", {}), "model", errors)
+    checkpoint = model_cfg.get("checkpoint")
+    if not checkpoint:
+        errors.append("model.checkpoint is required")
+    elif isinstance(checkpoint, str) and checkpoint.strip():
+        _must_exist(checkpoint.strip(), "model.checkpoint", root, errors)
+    else:
+        errors.append("model.checkpoint must be a non-empty string path")
+
+    # inference section
+    infer_cfg = _as_dict(cfg.get("inference", {}), "inference", errors)
+
+    ddim_steps = infer_cfg.get("ddim_steps")
+    if ddim_steps is not None:
+        _ensure_number_range(ddim_steps, "inference.ddim_steps", errors, min_v=1)
+
+    t_start = infer_cfg.get("t_start")
+    if t_start is not None:
+        _ensure_number_range(t_start, "inference.t_start", errors, min_v=0, max_v=999)
+
+    tile_size = infer_cfg.get("tile_size")
+    if tile_size is not None:
+        _ensure_number_range(tile_size, "inference.tile_size", errors, min_v=64)
+
+    if errors:
+        raise ValueError("Invalid upscaling config:\n- " + "\n- ".join(errors))

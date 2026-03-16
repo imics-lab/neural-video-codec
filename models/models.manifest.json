@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "models": [
+    {
+      "name": "diffusion_4x.pth",
+      "description": "ROI-aware diffusion super-resolution model, 4x scale",
+      "sha256": "a066e69eb64d58c2e0a439beb871ac4cf153422c47bf2e616f6bed93b1ceb1e7",
+      "size_mb": 473.0,
+      "download_url": "https://github.com/YOUR_ORG/gpu_upscaling/releases/download/v1.0/diffusion_4x.pth"
+    }
+  ]
+}
