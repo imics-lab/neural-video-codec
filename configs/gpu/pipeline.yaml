@@ -1,0 +1,23 @@
+input:
+  video_path: ""               # override via --video CLI argument
+  # Set to < 1.0 to downscale input before compression (eval mode: GT = original).
+  # e.g. 0.5 means 1080p → 540p → pipeline → 1080p; compare with original 1080p.
+  downscale_input: 1.0
+
+compression:
+  config: "configs/gpu/compression.yaml"
+
+decompression:
+  config: "configs/gpu/decompression.yaml"
+
+restoration:
+  config: "configs/gpu/restoration.yaml"
+  enable: true
+
+upscaling:
+  config: "configs/gpu/upscaling.yaml"
+  enable: true
+
+output:
+  out_dir: "outputs/pipeline"
+  save_intermediate: false     # write decompressed and restored frames to disk

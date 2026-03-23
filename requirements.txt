@@ -1,0 +1,40 @@
+# Neural Video Codec — Linux/CUDA requirements
+# Install with: pip install -r requirements.txt
+#
+# For PyTorch, select the wheel matching your CUDA version:
+#   CUDA 12.1:  --extra-index-url https://download.pytorch.org/whl/cu121
+#   CUDA 12.4:  --extra-index-url https://download.pytorch.org/whl/cu124
+#   CUDA 12.6:  --extra-index-url https://download.pytorch.org/whl/cu126
+#
+# The setup.sh script handles this automatically.
+
+# Core ML
+torch>=2.2.0
+torchvision>=0.17.0
+
+# Detection
+ultralytics>=8.3.0
+
+# Video / image I/O
+opencv-python-headless>=4.9.0
+Pillow>=10.0.0
+imageio>=2.34.0
+
+# Numerics
+numpy>=1.26.0
+scipy>=1.12.0
+
+# Perceptual losses (optional but recommended for training)
+lpips>=0.1.4
+
+# Config & logging
+PyYAML>=6.0.1
+omegaconf>=2.3.0
+tqdm>=4.66.0
+
+# Evaluation metrics
+scikit-image>=0.22.0
+
+# DCVC C++ extension build deps
+pybind11>=2.11.0
+setuptools>=69.0.0

@@ -1,0 +1,36 @@
+# Core ML
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.5.1+cu126
+torchvision==0.20.1+cu126
+
+# Detection
+ultralytics>=8.3.0            # YOLO11 support
+
+# Video / image I/O
+opencv-python-headless>=4.9.0
+Pillow>=10.0.0
+
+# Numerics
+numpy>=1.26.0
+scipy>=1.12.0
+
+# Perceptual losses
+lpips>=0.1.4
+
+# Config & logging
+PyYAML>=6.0.1
+omegaconf>=2.3.0
+loguru>=0.7.2
+
+# Progress & utilities
+tqdm>=4.66.0
+
+# DCVC C++ extension build deps
+pybind11>=2.11.0
+setuptools>=69.0.0
+
+# Evaluation metrics
+scikit-image>=0.22.0          # SSIM / PSNR
+
+# Streaming / data prep
+imageio>=2.34.0

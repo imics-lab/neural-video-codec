@@ -1,0 +1,16 @@
+decompression:
+  dcvc:
+    # Paths are resolved from archive metadata at runtime.
+    # Override here only if archive paths are stale (e.g. moved models folder).
+    repo_dir: "DCVC"
+    model_i: "models/cvpr2025_image.pth.tar"
+    model_p: "models/cvpr2025_video.pth.tar"
+    device: "cuda:0"
+    use_cuda: true
+    cuda_idx: 0
+    force_zero_thres: null
+  compositing:
+    feather_px: 8              # soft-edge blend pixels at ROI/BG boundary
+
+output:
+  out_dir: "outputs/decompression"

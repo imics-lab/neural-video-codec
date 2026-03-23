@@ -1,0 +1,43 @@
+detection:
+  model_path: "models/MDV6-yolov9-c.pt"
+  variant: "yolov9c"
+  device: "cuda:0"
+  half: true
+  processing_scale: 0.50       # run detector at this fraction of input resolution
+  imgsz: 640
+  conf: 0.25
+  iou_nms: 0.50
+  # COCO animal class IDs: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
+  animal_classes: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+  bbox_pad_frac: 0.10          # expand each bbox by this fraction of its own size
+  bbox_pad_px: 8               # additional fixed-pixel padding
+  keyframe_interval: 15        # run full YOLO every N frames; track between keyframes
+  tracking:
+    enabled: true
+    min_hits: 2                # confirmations before a track is emitted
+    max_det_gap: 90            # frames a track can survive without a detection
+    match_iou: 0.30            # IoU threshold for detection→track assignment
+    vel_smooth: 0.70           # EMA coefficient for velocity smoothing
+
+compression:
+  dcvc:
+    repo_dir: "DCVC"
+    model_i: "models/cvpr2025_image.pth.tar"
+    model_p: "models/cvpr2025_video.pth.tar"
+    device: "cuda:0"
+    use_cuda: true
+    cuda_idx: 0
+    reset_interval: 32
+    intra_period: -1           # -1 = first frame only is I-frame
+    force_zero_thres: null
+  quality:
+    roi_qp_i: 63               # high quality for ROI I-frames
+    roi_qp_p: 63               # high quality for ROI P-frames
+    bg_qp_i: 25                # lower quality for background I-frames
+    bg_qp_p: 25                # lower quality for background P-frames
+  roi:
+    dilate_px: 8               # dilate ROI mask before stream split
+    min_conf: 0.25             # minimum detection confidence to include in ROI
+
+output:
+  out_dir: "outputs/compression"

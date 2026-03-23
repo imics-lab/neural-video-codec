@@ -1,0 +1,28 @@
+device: "cuda:0"
+scale: 2                       # spatial upscaling factor
+
+model:
+  checkpoint: "models/upscaling.pth"
+  base_channels: 64
+  encoder_channels: [128, 256, 512]
+  num_res_blocks: 4
+  timesteps: 1000
+
+inference:
+  ddim_steps: 50               # denoising steps (8 = fast, 50 = quality)
+  t_start: 700                 # higher = stronger denoising (was 600 for clean SR)
+  tile_size: 768               # HR tile size in pixels; 0 = no tiling
+  tile_overlap: 64
+  color_fix: true
+
+training:
+  patch_size: 256
+  # Loss weights — tuned for combined SR + denoise + sharpen task
+  vgg_weight:   0.1            # perceptual similarity (VGG features)
+  lpips_weight: 0.1            # LPIPS perceptual loss
+  grad_weight:  0.05           # Sobel gradient loss — edge sharpness
+  lap_weight:   0.05           # Laplacian loss — fine detail / texture
+  freq_weight:  0.05           # FFT high-frequency loss — texture recovery
+
+output:
+  out_dir: "outputs/upscaling"

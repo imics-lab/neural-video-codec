@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/ -v --tb=long)",
+      "Bash(find D:/neural-video-codec -name MLCodec_extensions_cpp*)",
+      "Bash(find D:/neural-video-codec -name *.pyd)",
+      "Bash(python -c \"import compileall; import sysconfig; print\\(sysconfig.get_config_var\\(''EXT_SUFFIX''\\)\\)\")",
+      "Bash(where cl:*)",
+      "Bash(where link:*)",
+      "Bash(python -c \"import sys; print\\(''''\\\\n''''.join\\(sys.path\\)\\)\")",
+      "Read(//c/Users/seren/**)"
+    ]
+  }
+}

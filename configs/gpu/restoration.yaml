@@ -1,0 +1,21 @@
+device: "cuda:0"
+
+model:
+  checkpoint: "models/restoration.pth"
+  base_channels: 64
+  encoder_channels: [128, 256, 512]
+  num_res_blocks: 4
+  timesteps: 1000
+  temporal_window: 3           # frames attended simultaneously (must be odd)
+  n_heads: 4                   # temporal attention heads
+
+inference:
+  ddim_steps: 50               # denoising steps (8 = fast, 50 = quality)
+  t_start: 600                 # img2img start timestep; lower = more faithful to input
+  tile_size: 512               # 0 = no tiling; process full frame at once
+  tile_overlap: 64             # overlap between tiles for Gaussian blending
+  color_fix: true              # shift tile means to match LR color structure
+  batch_size: 1                # window batches processed at once
+
+output:
+  out_dir: "outputs/restoration"

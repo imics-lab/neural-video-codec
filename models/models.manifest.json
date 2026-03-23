@@ -1,0 +1,45 @@
+{
+  "_comment": "Model manifest for neural_video_codec. Run scripts/download_models.py to fetch weights.",
+  "models": [
+    {
+      "name": "DCVC I-frame (IntraNoAR)",
+      "path": "checkpoints/IntraNoAR/model.pth.tar",
+      "url": null,
+      "sha256": null,
+      "required": true,
+      "notes": "DCVC CVPR-2025 intra-frame model. Download from the official DCVC repository."
+    },
+    {
+      "name": "DCVC P-frame (DMC)",
+      "path": "checkpoints/video/model.pth.tar",
+      "url": null,
+      "sha256": null,
+      "required": true,
+      "notes": "DCVC CVPR-2025 inter-frame model. Download from the official DCVC repository."
+    },
+    {
+      "name": "YOLO11n (detection)",
+      "path": "checkpoints/yolo11n.pt",
+      "url": null,
+      "sha256": null,
+      "required": true,
+      "notes": "YOLOv11 nano checkpoint. Download via `pip install ultralytics` and `yolo export model=yolo11n.pt`."
+    },
+    {
+      "name": "Model R — Restoration (best)",
+      "path": "checkpoints/restoration/best.pt",
+      "url": null,
+      "sha256": null,
+      "required": false,
+      "notes": "Trained via training/train_restoration.py. Not pre-provided; must be trained locally."
+    },
+    {
+      "name": "Model S — Super-Resolution (best)",
+      "path": "checkpoints/sr/best.pt",
+      "url": null,
+      "sha256": null,
+      "required": false,
+      "notes": "Trained via training/train_sr.py. Not pre-provided; must be trained locally."
+    }
+  ]
+}

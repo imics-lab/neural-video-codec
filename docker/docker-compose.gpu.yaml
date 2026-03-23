@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  codec:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: neural-video-codec:gpu
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ../models:/app/models:ro
+      - ../outputs:/app/outputs
+      - ../data:/app/data:ro
+    ipc: host
+    stdin_open: true
+    tty: true
+
+  compress:
+    extends: codec
+    command: ["run_compress.py", "--video", "/app/data/input.mp4"]
+
+  decompress:
+    extends: codec
+    command: ["run_decompress.py", "--archive", "/app/outputs/compression/input.zip"]
+
+  restore:
+    extends: codec
+    command: ["run_restore.py", "--input", "/app/outputs/decompression/input"]
+
+  upscale:
+    extends: codec
+    command: ["run_upscale.py", "--input", "/app/outputs/restoration/input"]
+
+  pipeline:
+    extends: codec
+    command: ["run_pipeline.py", "--video", "/app/data/input.mp4"]

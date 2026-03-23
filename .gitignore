@@ -1,0 +1,51 @@
+# ── Large binary data (never commit) ─────────────────────────────────────────
+dataset/
+data/
+outputs/
+checkpoints/
+logs/
+
+# ── Model weights (too large for git — use git-lfs or copy manually) ──────────
+models/*.pth
+models/*.pth.tar
+models/*.pt
+models/*.onnx
+
+# ── DCVC repo (cloned separately on each machine) ────────────────────────────
+DCVC/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+*.dylib
+
+# ── Virtual envs / conda ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.conda/
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Temp / test artifacts ─────────────────────────────────────────────────────
+*.tmp
+*.zip
+tmp/

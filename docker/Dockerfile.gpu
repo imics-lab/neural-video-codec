@@ -1,0 +1,63 @@
+# ── Stage 1: base CUDA image ───────────────────────────────────────────────────
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3-pip python3.11-venv \
+    git wget curl \
+    libgl1-mesa-glx libglib2.0-0 libsm6 libxrender1 libxext6 \
+    build-essential ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    python -m pip install --upgrade pip
+
+# ── Stage 2: install Python deps ───────────────────────────────────────────────
+FROM base AS deps
+
+WORKDIR /app
+
+COPY requirements.txt /tmp/requirements.txt
+COPY docker/requirements.gpu.txt /tmp/requirements.gpu.txt
+
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    torch>=2.2.0 torchvision>=0.17.0
+
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ── Stage 3: build DCVC C++ entropy-coder extension ─────────────────────────────
+FROM deps AS dcvc_build
+
+COPY DCVC /app/DCVC
+
+RUN pip install --no-cache-dir pybind11 && \
+    cd /app/DCVC/src/cpp && \
+    python setup.py build_ext --inplace && \
+    pip install --no-cache-dir .
+
+# Verify the extension built correctly
+RUN python -c "from MLCodec_extensions_cpp import RansEncoder, RansDecoder; print('MLCodec OK')"
+
+# ── Stage 4: final image ────────────────────────────────────────────────────────
+FROM dcvc_build AS final
+
+WORKDIR /app
+
+COPY . /app
+
+# Ensure DCVC src is importable alongside our src/ as a namespace package
+# (no __init__.py in either src/ directory)
+RUN test ! -f /app/src/__init__.py && \
+    test ! -f /app/DCVC/src/__init__.py && \
+    echo "Namespace package check: OK" || \
+    (echo "ERROR: src/__init__.py must not exist"; exit 1)
+
+ENV PYTHONPATH="/app:/app/DCVC"
+
+ENTRYPOINT ["python"]
+CMD ["run_pipeline.py", "--help"]
