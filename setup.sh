@@ -103,12 +103,11 @@ if [[ ! -d "$DCVC_CPP" ]]; then
     exit 1
 fi
 
-$PIP install pybind11
+$PIP install pybind11 setuptools
 cd "$DCVC_CPP"
-# Build in-place so Python can find it via sys.path (DCVC/src/cpp on sys.path)
+# Build in-place and install; --no-build-isolation ensures pybind11 is visible
 $PYTHON setup.py build_ext --inplace
-# Also install as a proper package so any Python can import it
-$PIP install .
+$PIP install --no-build-isolation .
 cd "$SCRIPT_DIR"
 echo "   MLCodec_extensions_cpp built and installed."
 
