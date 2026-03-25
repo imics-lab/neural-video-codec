@@ -105,6 +105,8 @@ fi
 
 $PIP install pybind11 setuptools
 cd "$DCVC_CPP"
+# Fix overly strict python_requires (upstream says >=3.12 but 3.9+ works fine)
+sed -i 's/python_requires=">=3\.12"/python_requires=">=3.9"/' setup.py
 # Build in-place and install; --no-build-isolation ensures pybind11 is visible
 $PYTHON setup.py build_ext --inplace
 $PIP install --no-build-isolation .
