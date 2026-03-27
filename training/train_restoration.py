@@ -264,6 +264,9 @@ def train(args: argparse.Namespace) -> None:
 
     # Model + schedule
     model    = _build_model(cfg, device)
+    if torch.cuda.device_count() > 1:
+        LOGGER.info(f"Using {torch.cuda.device_count()} GPUs via DataParallel")
+        model = nn.DataParallel(model)
     schedule = DiffusionSchedule(T=1000).to(device)
     vgg_loss = VGGPerceptualLoss().to(device)
 
