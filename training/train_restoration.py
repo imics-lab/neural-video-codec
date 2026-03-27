@@ -310,8 +310,10 @@ def train(args: argparse.Namespace) -> None:
             # deg_window : (B, T*3, H, W)
             # orig_centre: (B, 3, H, W)
             B  = orig_centre.size(0)
+            if step == 0: LOGGER.info(f"  B={B}, moving to device ...")
             deg_window   = deg_window.to(device)
             orig_centre  = orig_centre.to(device)
+            if step == 0: LOGGER.info("  tensors on device"); torch.cuda.synchronize()
 
             # Sample random diffusion timestep
             t_idx = torch.randint(0, schedule.T, (B,), device=device)
@@ -319,32 +321,27 @@ def train(args: argparse.Namespace) -> None:
             # Forward diffusion on clean centre frame (scaled to [-1,1])
             x0    = orig_centre * 2.0 - 1.0
             x_t, noise = schedule.q_sample(x0, t_idx)
+            if step == 0: LOGGER.info("  q_sample done"); torch.cuda.synchronize()
 
             # Degrade window to [-1,1] for conditioning
-            # Pick centre-frame slice from deg_window: channel offset = centre*3
             c = T_win // 2
-            deg_cond = deg_window[:, c*3:(c+1)*3] * 2.0 - 1.0  # (B,3,H,W)
+            deg_cond = deg_window[:, c*3:(c+1)*3] * 2.0 - 1.0
 
-            # Build model input: (B, T, 6, H, W) — each temporal slot gets
-            # x_t + its degraded frame.
-            # For non-centre slots the "target noise" is irrelevant but the
-            # network needs consistent input shape.
             inputs = []
             for ti in range(T_win):
                 deg_i = deg_window[:, ti*3:(ti+1)*3] * 2.0 - 1.0
                 if ti == c:
                     noised_i = x_t
                 else:
-                    # Noise centre-frame but expose neighbouring degraded frames
-                    noised_i = x_t  # same noise — simplified; network learns context
-                inputs.append(torch.cat([noised_i, deg_i], dim=1))  # (B,6,H,W)
+                    noised_i = x_t
+                inputs.append(torch.cat([noised_i, deg_i], dim=1))
 
-            # Stack along batch: (B*T, 6, H, W)
             model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
             t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
+            if step == 0: LOGGER.info("  model_in ready, calling model ..."); torch.cuda.synchronize()
 
             pred_noise = model(model_in, t_rep)  # (B*T, 3, H, W)
-            if step == 0: LOGGER.info("  forward done")
+            if step == 0: LOGGER.info("  forward done"); torch.cuda.synchronize()
 
             # Only supervise on centre frame
             pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c]
