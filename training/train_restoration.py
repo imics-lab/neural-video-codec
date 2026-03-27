@@ -264,9 +264,12 @@ def train(args: argparse.Namespace) -> None:
 
     # Model + schedule
     model    = _build_model(cfg, device)
-    if torch.cuda.device_count() > 1:
-        LOGGER.info(f"Using {torch.cuda.device_count()} GPUs via DataParallel")
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1 and args.batch_size >= n_gpus:
+        LOGGER.info(f"Using {n_gpus} GPUs via DataParallel")
         model = nn.DataParallel(model)
+    else:
+        LOGGER.info(f"Using 1 GPU (device_count={n_gpus}, batch_size={args.batch_size})")
     schedule = DiffusionSchedule(T=1000).to(device)
     vgg_loss = VGGPerceptualLoss().to(device)
 
