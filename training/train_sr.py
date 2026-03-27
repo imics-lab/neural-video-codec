@@ -46,7 +46,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, random_split
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 LOGGER = logging.getLogger("train.sr")
 
