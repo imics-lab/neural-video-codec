@@ -344,11 +344,13 @@ def train(args: argparse.Namespace) -> None:
             t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
 
             pred_noise = model(model_in, t_rep)  # (B*T, 3, H, W)
+            if step == 0: LOGGER.info("  forward done")
 
             # Only supervise on centre frame
             pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c]
 
             l1_loss  = F.l1_loss(pred_centre, noise)
+            if step == 0: LOGGER.info("  l1 done")
             # VGG on reconstructed x0 estimate
             sqrt_acp = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
             sqrt_omacp = schedule.sqrt_one_minus_acp[t_idx].view(B, 1, 1, 1)
@@ -356,11 +358,13 @@ def train(args: argparse.Namespace) -> None:
             x0_hat = x0_hat.clamp(-1.0, 1.0)
             # Convert to [0,1] for VGG
             perc_loss = vgg_loss((x0_hat + 1) / 2, (x0 + 1) / 2)
+            if step == 0: LOGGER.info("  vgg done")
 
             loss = l1_loss + vgg_w * perc_loss
 
             optimiser.zero_grad()
             loss.backward()
+            if step == 0: LOGGER.info("  backward done")
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
 
