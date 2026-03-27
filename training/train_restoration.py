@@ -239,11 +239,14 @@ def _build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
 
 def train(args: argparse.Namespace) -> None:
     cfg    = _load_config(args.config)
-    if args.gpu is not None:
-        import os
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-        torch.cuda.set_device(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gpu_ids = None
+    if args.gpus is not None:
+        gpu_ids = [int(g) for g in args.gpus.split(",")]
+        torch.cuda.set_device(gpu_ids[0])
+    elif args.gpu is not None:
+        gpu_ids = [args.gpu]
+        torch.cuda.set_device(args.gpu)
+    device = torch.device(f"cuda:{gpu_ids[0]}" if gpu_ids else ("cuda" if torch.cuda.is_available() else "cpu"))
     LOGGER.info(f"Device: {device}")
 
     # Dataset
@@ -268,12 +271,11 @@ def train(args: argparse.Namespace) -> None:
 
     # Model + schedule
     model    = _build_model(cfg, device)
-    n_gpus = torch.cuda.device_count()
-    if n_gpus > 1 and args.batch_size >= n_gpus:
-        LOGGER.info(f"Using {n_gpus} GPUs via DataParallel")
-        model = nn.DataParallel(model)
+    if gpu_ids and len(gpu_ids) > 1 and args.batch_size >= len(gpu_ids):
+        LOGGER.info(f"Using GPUs {gpu_ids} via DataParallel")
+        model = nn.DataParallel(model, device_ids=gpu_ids)
     else:
-        LOGGER.info(f"Using 1 GPU (device_count={n_gpus}, batch_size={args.batch_size})")
+        LOGGER.info(f"Using single GPU {device}")
     schedule = DiffusionSchedule(T=1000).to(device)
     vgg_loss = VGGPerceptualLoss().to(device)
 
@@ -463,7 +465,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--log-every",     type=int,   default=50)
     p.add_argument("--save-every",    type=int,   default=5)
     p.add_argument("--gpu",           type=int,   default=None,
-                   help="GPU index to use (single GPU, disables DataParallel)")
+                   help="Single GPU index (e.g. --gpu 2)")
+    p.add_argument("--gpus",          default=None,
+                   help="Comma-separated GPU indices for DataParallel (e.g. --gpus 1,2,3,4)")
     p.add_argument("--verbose",       action="store_true")
     return p.parse_args()
 
