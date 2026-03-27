@@ -239,6 +239,10 @@ def _build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
 
 def train(args: argparse.Namespace) -> None:
     cfg    = _load_config(args.config)
+    if args.gpu is not None:
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+        torch.cuda.set_device(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     LOGGER.info(f"Device: {device}")
 
@@ -458,6 +462,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--workers",       type=int,   default=4)
     p.add_argument("--log-every",     type=int,   default=50)
     p.add_argument("--save-every",    type=int,   default=5)
+    p.add_argument("--gpu",           type=int,   default=None,
+                   help="GPU index to use (single GPU, disables DataParallel)")
     p.add_argument("--verbose",       action="store_true")
     return p.parse_args()
 
