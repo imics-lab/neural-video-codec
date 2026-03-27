@@ -298,6 +298,7 @@ def train(args: argparse.Namespace) -> None:
 
     for epoch in range(start_epoch, args.epochs):
         # ── Train ──────────────────────────────────────────────────────────
+        LOGGER.info(f"Epoch {epoch+1}/{args.epochs} starting ({len(trn_loader)} steps) ...")
         model.train()
         trn_loss = 0.0
         t_start  = time.perf_counter()
