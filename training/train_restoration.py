@@ -303,7 +303,10 @@ def train(args: argparse.Namespace) -> None:
         trn_loss = 0.0
         t_start  = time.perf_counter()
 
+        LOGGER.info("Entering data loop ...")
         for step, (deg_window, orig_centre) in enumerate(trn_loader):
+            if step == 0:
+                LOGGER.info("First batch loaded, starting forward pass ...")
             # deg_window : (B, T*3, H, W)
             # orig_centre: (B, 3, H, W)
             B  = orig_centre.size(0)
