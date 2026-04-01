@@ -30,7 +30,7 @@ except ImportError:
     yaml = None  # type: ignore[assignment]
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 LOGGER = logging.getLogger("codec.pipeline")
 
@@ -196,11 +196,33 @@ def main() -> int:
     )
 
     if upscale_enabled:
-        _status("Step 4/4 — Upscaling (Model S) ...")
+        _status("Step 4/4 — Upscaling (Real-ESRGAN) ...")
         t3 = time.perf_counter()
-        upscale_cfg = _merge_sub_config(pipeline_cfg, "upscaling")
-        from src.upscaling.phase_upscale import upscale_frames
-        frames = upscale_frames(frames, upscale_cfg)
+        upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
+        scale       = int(upscale_cfg.get("scale", 4))
+        tile        = int(upscale_cfg.get("tile", 512))
+        half        = bool(upscale_cfg.get("half", False))
+        weights_dir = Path(upscale_cfg.get("weights_dir", "weights"))
+        model_path  = weights_dir / f"RealESRGAN_x{scale}plus.pth"
+
+        if not model_path.exists():
+            import urllib.request
+            _urls = {
+                4: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+                2: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+            }
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            _status(f"  Downloading Real-ESRGAN x{scale} weights ...")
+            urllib.request.urlretrieve(_urls[scale], model_path)
+
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from realesrgan import RealESRGANer
+        _model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64,
+                         num_block=23, num_grow_ch=32, scale=scale)
+        upsampler = RealESRGANer(scale=scale, model_path=str(model_path),
+                                 model=_model, tile=tile, tile_pad=10,
+                                 pre_pad=0, half=half)
+        frames = [upsampler.enhance(f, outscale=scale)[0] for f in frames]
         _status(f"  Upscaling done in {time.perf_counter()-t3:.1f}s")
     else:
         _status("Step 4/4 — Upscaling SKIPPED")

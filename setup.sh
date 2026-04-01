@@ -93,6 +93,9 @@ $PIP install --extra-index-url "$TORCH_INDEX" \
 # Install the rest
 $PIP install -r "${SCRIPT_DIR}/requirements.txt"
 
+# Real-ESRGAN for super-resolution (pretrained, no training needed)
+$PIP install realesrgan basicsr
+
 # ── 3. Build DCVC C++ entropy-coder extension ────────────────────────────────
 echo "[3/5] Building DCVC MLCodec_extensions_cpp ..."
 DCVC_CPP="${SCRIPT_DIR}/DCVC/src/cpp"
