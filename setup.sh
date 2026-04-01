@@ -93,19 +93,22 @@ $PIP install --extra-index-url "$TORCH_INDEX" \
 # Install the rest
 $PIP install -r "${SCRIPT_DIR}/requirements.txt"
 
-# S3Diff dependencies (one-step diffusion SR)
-$PIP install diffusers transformers peft accelerate huggingface_hub omegaconf
+# S3Diff dependencies — install manually to avoid torch version conflicts
+$PIP install "numpy<2.0"  # torch 2.5 ABI requires numpy 1.x
+$PIP install diffusers==0.25.1 transformers==4.35.2 peft==0.10.0 accelerate huggingface_hub==0.22.2 omegaconf
+$PIP install einops timm open-clip-torch lpips dominate
 $PIP install xformers --index-url https://download.pytorch.org/whl/cu121
 
-# Clone S3Diff repo if not present
+# Clone S3Diff repo if not present (skip its requirements.txt — versions conflict with our torch)
 S3DIFF_DIR="${SCRIPT_DIR}/S3Diff"
 if [[ ! -d "$S3DIFF_DIR" ]]; then
     echo "   Cloning S3Diff ..."
     git clone https://github.com/ArcticHare105/S3Diff.git "$S3DIFF_DIR"
 fi
-if [[ -f "${S3DIFF_DIR}/requirements.txt" ]]; then
-    $PIP install -r "${S3DIFF_DIR}/requirements.txt" --no-deps
-fi
+
+# Reinstall correct torch after S3Diff deps (in case anything downgraded it)
+$PIP install --extra-index-url "$TORCH_INDEX" \
+    "torch>=2.2.0" "torchvision>=0.17.0" "torchaudio>=2.2.0"
 
 # ── 3. Build DCVC C++ entropy-coder extension ────────────────────────────────
 echo "[3/5] Building DCVC MLCodec_extensions_cpp ..."
