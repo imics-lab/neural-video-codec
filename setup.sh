@@ -93,8 +93,19 @@ $PIP install --extra-index-url "$TORCH_INDEX" \
 # Install the rest
 $PIP install -r "${SCRIPT_DIR}/requirements.txt"
 
-# Real-ESRGAN for super-resolution (pretrained, no training needed)
-$PIP install realesrgan basicsr
+# S3Diff dependencies (one-step diffusion SR)
+$PIP install diffusers transformers peft accelerate huggingface_hub omegaconf
+$PIP install xformers --index-url https://download.pytorch.org/whl/cu121
+
+# Clone S3Diff repo if not present
+S3DIFF_DIR="${SCRIPT_DIR}/S3Diff"
+if [[ ! -d "$S3DIFF_DIR" ]]; then
+    echo "   Cloning S3Diff ..."
+    git clone https://github.com/ArcticHare105/S3Diff.git "$S3DIFF_DIR"
+fi
+if [[ -f "${S3DIFF_DIR}/requirements.txt" ]]; then
+    $PIP install -r "${S3DIFF_DIR}/requirements.txt" --no-deps
+fi
 
 # ── 3. Build DCVC C++ entropy-coder extension ────────────────────────────────
 echo "[3/5] Building DCVC MLCodec_extensions_cpp ..."

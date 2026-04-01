@@ -11,8 +11,10 @@ models/*.pth.tar
 models/*.pt
 models/*.onnx
 
-# ── DCVC repo (cloned separately on each machine) ────────────────────────────
+# ── External repos (cloned separately on each machine) ───────────────────────
 DCVC/
+S3Diff/
+weights/
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
