@@ -387,33 +387,37 @@ def train(args: argparse.Namespace) -> None:
         scheduler.step()
 
         # ── Validate ───────────────────────────────────────────────────────
-        model.eval()
         val_loss = 0.0
-        with torch.no_grad():
-            for deg_window, orig_centre in val_loader:
-                B  = orig_centre.size(0)
-                deg_window  = deg_window.to(device)
-                orig_centre = orig_centre.to(device)
+        if not args.no_val:
+            # Unwrap DataParallel for validation to avoid Blackwell alignment issues
+            eval_model = model.module if isinstance(model, nn.DataParallel) else model
+            eval_model.eval()
+            with torch.no_grad():
+                for deg_window, orig_centre in val_loader:
+                    B  = orig_centre.size(0)
+                    deg_window  = deg_window.to(device)
+                    orig_centre = orig_centre.to(device)
 
-                t_idx = torch.randint(0, schedule.T, (B,), device=device)
-                x0    = orig_centre * 2.0 - 1.0
-                x_t, noise = schedule.q_sample(x0, t_idx)
+                    t_idx = torch.randint(0, schedule.T, (B,), device=device)
+                    x0    = orig_centre * 2.0 - 1.0
+                    x_t, noise = schedule.q_sample(x0, t_idx)
 
-                c = T_win // 2
-                inputs = []
-                for ti in range(T_win):
-                    deg_i = deg_window[:, ti*3:(ti+1)*3] * 2.0 - 1.0
-                    inputs.append(torch.cat([x_t, deg_i], dim=1))
-                model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
-                t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
+                    c = T_win // 2
+                    inputs = []
+                    for ti in range(T_win):
+                        deg_i = deg_window[:, ti*3:(ti+1)*3] * 2.0 - 1.0
+                        inputs.append(torch.cat([x_t, deg_i], dim=1))
+                    model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
+                    t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
 
-                pred_noise = model(model_in, t_rep).contiguous()
-                pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
-                val_loss += F.l1_loss(pred_centre, noise.contiguous()).item()
+                    pred_noise  = eval_model(model_in, t_rep)
+                    pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c]
+                    val_loss += F.l1_loss(pred_centre, noise).item()
 
-        val_loss /= max(len(val_loader), 1)
+            val_loss /= max(len(val_loader), 1)
+            eval_model.train()
+
         elapsed = time.perf_counter() - t_start
-
         LOGGER.info(
             f"Epoch {epoch+1}/{args.epochs} | "
             f"trn={trn_loss:.4f} val={val_loss:.4f} | "
@@ -422,7 +426,7 @@ def train(args: argparse.Namespace) -> None:
         )
 
         # ── Checkpoint ─────────────────────────────────────────────────────
-        is_best = val_loss < best_val
+        is_best = (val_loss < best_val) if not args.no_val else True
         if is_best:
             best_val = val_loss
 
@@ -468,6 +472,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Single GPU index (e.g. --gpu 2)")
     p.add_argument("--gpus",          default=None,
                    help="Comma-separated GPU indices for DataParallel (e.g. --gpus 1,2,3,4)")
+    p.add_argument("--no-val",        action="store_true",
+                   help="Skip validation (avoids DataParallel issues on some GPUs)")
     p.add_argument("--verbose",       action="store_true")
     return p.parse_args()
 
