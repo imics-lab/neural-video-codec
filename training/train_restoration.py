@@ -349,13 +349,13 @@ def train(args: argparse.Namespace) -> None:
             t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
             if step == 0: LOGGER.info("  model_in ready, calling model ..."); torch.cuda.synchronize()
 
-            pred_noise = model(model_in, t_rep)  # (B*T, 3, H, W)
+            pred_noise = model(model_in, t_rep).contiguous()  # (B*T, 3, H, W)
             if step == 0: LOGGER.info("  forward done"); torch.cuda.synchronize()
 
             # Only supervise on centre frame
-            pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c]
+            pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
 
-            l1_loss  = F.l1_loss(pred_centre, noise)
+            l1_loss  = F.l1_loss(pred_centre, noise.contiguous())
             if step == 0: LOGGER.info("  l1 done")
             # VGG on reconstructed x0 estimate
             sqrt_acp = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
@@ -407,9 +407,9 @@ def train(args: argparse.Namespace) -> None:
                 model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
                 t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
 
-                pred_noise = model(model_in, t_rep)
-                pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c]
-                val_loss += F.l1_loss(pred_centre, noise).item()
+                pred_noise = model(model_in, t_rep).contiguous()
+                pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
+                val_loss += F.l1_loss(pred_centre, noise.contiguous()).item()
 
         val_loss /= max(len(val_loader), 1)
         elapsed = time.perf_counter() - t_start
