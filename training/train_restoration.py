@@ -266,7 +266,7 @@ def train(args: argparse.Namespace) -> None:
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True,
+        num_workers=args.workers, pin_memory=True, drop_last=True,
     )
 
     # Model + schedule
