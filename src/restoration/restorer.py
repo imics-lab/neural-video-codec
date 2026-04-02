@@ -76,6 +76,10 @@ class Restorer:
             mcfg  = {}
             T_ckpt = self.T
 
+        # Strip DataParallel 'module.' prefix if present
+        if any(k.startswith("module.") for k in state):
+            state = {k[len("module."):]: v for k, v in state.items()}
+
         self.model = RestoreUNet(
             base_channels=mcfg.get("base_channels",    config.model.base_channels),
             encoder_channels=tuple(mcfg.get("encoder_channels", config.model.encoder_channels)),
