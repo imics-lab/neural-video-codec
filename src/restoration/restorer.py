@@ -120,11 +120,20 @@ class Restorer:
         half   = T // 2
         restored: List[Optional[torch.Tensor]] = [None] * N
 
+        import time as _time
+        t0 = _time.perf_counter()
         for centre in range(N):
             window_indices = [max(0, min(N - 1, centre + k - half)) for k in range(T)]
             window = torch.stack([deg_tensors[i] for i in window_indices], dim=0)  # (T, 3, H, W)
             out_t = self._restore_window(window, centre_idx=half)
             restored[centre] = out_t
+
+            if (centre + 1) % 10 == 0 or (centre + 1) == N:
+                elapsed = _time.perf_counter() - t0
+                fps = (centre + 1) / elapsed
+                eta = (N - centre - 1) / fps if fps > 0 else 0
+                print(f"[restore] {centre+1}/{N} frames  {fps:.2f} fps  ETA {eta:.0f}s",
+                      flush=True)
 
         return [_to_frame(t) for t in restored if t is not None]
 
