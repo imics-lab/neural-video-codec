@@ -116,24 +116,57 @@ class Restorer:
         # Pre-convert all frames to tensors
         deg_tensors = [_to_tensor(f).to(self.device) for f in degraded_frames]
 
-        T      = self.T
-        half   = T // 2
+        T          = self.T
+        half       = T // 2
+        _, H, W    = deg_tensors[0].shape
+        batch_size = int(getattr(self.cfg.inference, 'batch_size', 1))
+        cfg        = self.cfg
+        tile_sz    = cfg.inference.tile_size
         restored: List[Optional[torch.Tensor]] = [None] * N
 
         import time as _time
         t0 = _time.perf_counter()
-        for centre in range(N):
-            window_indices = [max(0, min(N - 1, centre + k - half)) for k in range(T)]
-            window = torch.stack([deg_tensors[i] for i in window_indices], dim=0)  # (T, 3, H, W)
-            out_t = self._restore_window(window, centre_idx=half)
-            restored[centre] = out_t
+        processed = 0
 
-            if (centre + 1) % 10 == 0 or (centre + 1) == N:
-                elapsed = _time.perf_counter() - t0
-                fps = (centre + 1) / elapsed
-                eta = (N - centre - 1) / fps if fps > 0 else 0
-                print(f"[restore] {centre+1}/{N} frames  {fps:.2f} fps  ETA {eta:.0f}s",
-                      flush=True)
+        for batch_start in range(0, N, batch_size):
+            centres = list(range(batch_start, min(batch_start + batch_size, N)))
+            B = len(centres)
+
+            # Build windows and stack: (B*T, 3, H, W)
+            windows = []
+            for centre in centres:
+                idxs = [max(0, min(N - 1, centre + k - half)) for k in range(T)]
+                windows.append(torch.stack([deg_tensors[i] for i in idxs], dim=0))
+            cond = torch.stack(windows, dim=0).view(B * T, 3, H, W)
+
+            if tile_sz > 0 and (H > tile_sz or W > tile_sz):
+                # Tiled path: fall back to per-frame to keep memory bounded
+                for i, centre in enumerate(centres):
+                    restored[centre] = self._restore_window(windows[i], half)
+            else:
+                t_s  = cfg.inference.t_start
+                ab_s = self.diffusion.alpha_bar[t_s].to(self.device)
+                noise = torch.randn_like(cond)
+                x = ab_s.sqrt() * cond + (1.0 - ab_s).sqrt() * noise
+
+                x_out = self._denoise_full(x, cond)          # (B*T, 3, H, W)
+                x_out = x_out.view(B, T, 3, H, W)
+                cond_b = cond.view(B, T, 3, H, W)
+
+                for i, centre in enumerate(centres):
+                    out = x_out[i, half]
+                    if cfg.inference.color_fix:
+                        dm  = cond_b[i, half].mean(dim=[1, 2], keepdim=True)
+                        om  = out.mean(dim=[1, 2], keepdim=True)
+                        out = (out - om + dm).clamp(0.0, 1.0)
+                    restored[centre] = out
+
+            processed += B
+            elapsed = _time.perf_counter() - t0
+            fps = processed / elapsed
+            eta = (N - processed) / fps if fps > 0 else 0
+            print(f"[restore] {processed}/{N} frames  {fps:.2f} fps  ETA {eta:.0f}s",
+                  flush=True)
 
         return [_to_frame(t) for t in restored if t is not None]
 
