@@ -251,8 +251,7 @@ def main() -> int:
         _status("  Loading S3Diff ...")
         _upscale_device = _torch.device(pipeline_cfg.get("device", "cuda"))
         _net_sr = _S3Diff(lora_rank_unet=32, lora_rank_vae=16,
-                          sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH),
-                          device=_upscale_device)
+                          sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
         _net_sr.set_eval()
         if half:
             _net_sr.half()
