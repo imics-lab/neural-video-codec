@@ -253,6 +253,7 @@ def main() -> int:
         _net_sr = _S3Diff(lora_rank_unet=32, lora_rank_vae=16,
                           sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
         _net_sr.set_eval()
+        _net_sr = _net_sr.cuda()   # ensure all submodules are on GPU
         if half:
             _net_sr.half()
 
