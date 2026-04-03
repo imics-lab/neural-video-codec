@@ -88,6 +88,13 @@ def main() -> int:
     args   = _parse_args()
     _setup_logging(args.verbose)
 
+    # Pre-initialize CUDA context on all visible GPUs before DCVC runs.
+    # DCVC sets CUDA_VISIBLE_DEVICES internally which prevents later access
+    # to GPUs whose context wasn't already established.
+    import torch as _torch
+    for _i in range(_torch.cuda.device_count()):
+        _torch.zeros(1, device=f"cuda:{_i}")
+
     pipeline_cfg = _load_config(args.config)
 
     video_path = Path(args.video)
