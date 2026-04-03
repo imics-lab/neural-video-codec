@@ -79,6 +79,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Downscale input by this factor (eval mode, e.g. 0.5)")
     p.add_argument("--skip-restore",    action="store_true")
     p.add_argument("--skip-upscale",    action="store_true")
+    p.add_argument("--use-s3diff",      action="store_true",
+                   help="Use S3Diff diffusion upscaling instead of Lanczos (slower, higher quality)")
     p.add_argument("--save-intermediate", action="store_true")
     p.add_argument("--verbose",         action="store_true")
     return p.parse_args()
@@ -208,17 +210,108 @@ def main() -> int:
     )
 
     if upscale_enabled:
-        _status("Step 4/4 — Upscaling (Lanczos bicubic) ...")
-        t3 = time.perf_counter()
         upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
         scale = int(upscale_cfg.get("scale", 4))
-        import cv2 as _cv2
-        h0, w0 = frames[0].shape[:2]
-        th, tw = h0 * scale, w0 * scale
-        frames = [_cv2.resize(f, (tw, th), interpolation=_cv2.INTER_LANCZOS4)
-                  for f in frames]
+        t3 = time.perf_counter()
+
+        if args.use_s3diff:
+            _status("Step 4/4 — Upscaling (S3Diff) ...")
+            import sys as _sys, random as _random, math as _math, subprocess as _subprocess
+            import numpy as _np
+            import torch as _torch
+            import torch.nn.functional as _F
+            from torchvision import transforms as _transforms
+            import urllib.request as _urlreq
+
+            S3DIFF_DIR  = ROOT / "S3Diff"
+            weights_dir = Path(upscale_cfg.get("weights_dir", "weights"))
+            DE_NET_PATH = weights_dir / "de_net.pth"
+            S3DIFF_PATH = weights_dir / "s3diff.pkl"
+
+            def _dl(url, dest):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                _status(f"  Downloading {dest.name} ...")
+                _urlreq.urlretrieve(url, dest)
+
+            if not S3DIFF_DIR.exists():
+                _subprocess.run(["git", "clone",
+                    "https://github.com/ArcticHare105/S3Diff.git", str(S3DIFF_DIR)], check=True)
+            if not DE_NET_PATH.exists():
+                _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/de_net.pth", DE_NET_PATH)
+            if not S3DIFF_PATH.exists():
+                _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/s3diff.pkl", S3DIFF_PATH)
+
+            for _p in [str(S3DIFF_DIR / "src"), str(S3DIFF_DIR)]:
+                if _p not in _sys.path:
+                    _sys.path.insert(0, _p)
+
+            from huggingface_hub import snapshot_download as _snap_dl
+            from s3diff import S3Diff as _S3Diff
+            from de_net import DEResNet as _DEResNet
+
+            _status("  Downloading stabilityai/sd-turbo (cached after first run) ...")
+            _sd_path = _snap_dl(repo_id="stabilityai/sd-turbo")
+            _status("  Loading S3Diff ...")
+            _upscale_device = _torch.device(pipeline_cfg.get("device", "cuda"))
+            _net_sr = _S3Diff(lora_rank_unet=32, lora_rank_vae=16,
+                              sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
+            _net_sr.set_eval()
+            _net_sr = _net_sr.cuda()
+            half = bool(upscale_cfg.get("half", False))
+            if half:
+                _net_sr.half()
+            _net_de = _DEResNet(num_in_ch=3, num_degradation=2)
+            _de_ckpt = _torch.load(str(DE_NET_PATH), map_location="cpu")
+            _net_de.load_state_dict(_de_ckpt.get("state_dict", _de_ckpt))
+            _net_de.to(_upscale_device).eval()
+            seed = int(upscale_cfg.get("seed", 42))
+
+            def _set_seed(s):
+                _torch.manual_seed(s); _torch.cuda.manual_seed_all(s)
+                _np.random.seed(s); _random.seed(s)
+
+            def _upscale_s3diff(frame_bgr):
+                import cv2 as _cv2
+                frame_rgb = _cv2.cvtColor(frame_bgr, _cv2.COLOR_BGR2RGB)
+                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device)
+                if half: im_lr = im_lr.half()
+                ori_h, ori_w = im_lr.shape[2:]
+                im_up = _F.interpolate(im_lr, size=(ori_h * scale, ori_w * scale),
+                                       mode="bilinear", align_corners=False).contiguous()
+                im_norm = (im_up * 2.0 - 1.0).clamp(-1.0, 1.0)
+                res_h, res_w = im_norm.shape[2:]
+                pad_h = _math.ceil(res_h / 64) * 64 - res_h
+                pad_w = _math.ceil(res_w / 64) * 64 - res_w
+                im_pad = _F.pad(im_norm, (0, pad_w, 0, pad_h), mode="reflect")
+                with _torch.no_grad():
+                    deg = _net_de(im_lr).to(im_pad.device)
+                    out = _net_sr(im_pad, deg, prompt="a clear and high quality image")
+                out = out[:, :, :res_h, :res_w]
+                out_t = (out * 0.5 + 0.5).clamp(0, 1).cpu().float()
+                out_np = (out_t[0].permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(_np.uint8)
+                return _cv2.cvtColor(out_np, _cv2.COLOR_RGB2BGR)
+
+            upscaled = []
+            for i, frame in enumerate(frames):
+                _set_seed(seed)
+                upscaled.append(_upscale_s3diff(frame))
+                if (i + 1) % 10 == 0 or (i + 1) == len(frames):
+                    elapsed = time.perf_counter() - t3
+                    fps_up = (i + 1) / elapsed
+                    eta = (len(frames) - i - 1) / fps_up if fps_up > 0 else 0
+                    _status(f"  [upscale] {i+1}/{len(frames)} frames  {fps_up:.2f} fps  ETA {eta:.0f}s")
+            frames = upscaled
+        else:
+            _status("Step 4/4 — Upscaling (Lanczos bicubic) ...")
+            import cv2 as _cv2
+            h0, w0 = frames[0].shape[:2]
+            th, tw = h0 * scale, w0 * scale
+            frames = [_cv2.resize(f, (tw, th), interpolation=_cv2.INTER_LANCZOS4)
+                      for f in frames]
+
         _status(f"  Upscaling done in {time.perf_counter()-t3:.1f}s  "
-                f"({w0}×{h0} → {tw}×{th})")
+                f"({frames[0].shape[1]//scale}×{frames[0].shape[0]//scale} → "
+                f"{frames[0].shape[1]}×{frames[0].shape[0]})")
     else:
         _status("Step 4/4 — Upscaling SKIPPED")
 
