@@ -66,7 +66,7 @@ class Restorer:
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Restoration checkpoint not found: {ckpt_path}")
 
-        ckpt = torch.load(str(ckpt_path), map_location=self.device, weights_only=False)
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         if isinstance(ckpt, dict) and "model" in ckpt:
             state = ckpt["model"]
             mcfg  = ckpt.get("model_cfg", {})
