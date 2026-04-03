@@ -166,6 +166,11 @@ def main() -> int:
     _status(f"  Decompression done in {time.perf_counter()-t1:.1f}s "
             f"({len(frames)} frames)")
 
+    # DCVC sets os.environ['CUDA_VISIBLE_DEVICES'] during encode/decode which
+    # breaks subsequent CUDA device access — reset it before restoration.
+    import os as _os
+    _os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+
     # ── Step 3: Restore (optional) ────────────────────────────────────────────
     restore_enabled = (
         not args.skip_restore
