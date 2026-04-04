@@ -14,7 +14,7 @@ def assemble_video(
     frames: Iterable[np.ndarray],
     output_path: str | Path,
     fps: float,
-    codec: str = "mp4v",
+    codec: str = "avc1",
 ) -> Path:
     """
     Write BGR frames to an MP4.
