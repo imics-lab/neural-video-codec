@@ -223,6 +223,9 @@ def main() -> int:
             from torchvision import transforms as _transforms
             import urllib.request as _urlreq
 
+            # Option 4: override scale to 2× (4× is ~4× more compute and VRAM)
+            scale = 2
+
             S3DIFF_DIR  = ROOT / "S3Diff"
             weights_dir = Path(upscale_cfg.get("weights_dir", "weights"))
             DE_NET_PATH = weights_dir / "de_net.pth"
@@ -257,13 +260,17 @@ def main() -> int:
                               sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
             _net_sr.set_eval()
             _net_sr = _net_sr.cuda()
-            half = bool(upscale_cfg.get("half", False))
-            if half:
-                _net_sr.half()
+            # Option 1: half precision — ~1.5-2× speedup on Blackwell tensor cores
+            half = True
+            _net_sr.half()
             _net_de = _DEResNet(num_in_ch=3, num_degradation=2)
             _de_ckpt = _torch.load(str(DE_NET_PATH), map_location="cpu")
             _net_de.load_state_dict(_de_ckpt.get("state_dict", _de_ckpt))
-            _net_de.to(_upscale_device).eval()
+            _net_de.to(_upscale_device).half().eval()
+            # Option 5: torch.compile — ~20-40% speedup after first-frame warmup
+            _status("  Compiling models with torch.compile ...")
+            _net_sr = _torch.compile(_net_sr, mode="reduce-overhead")
+            _net_de = _torch.compile(_net_de, mode="reduce-overhead")
             seed = int(upscale_cfg.get("seed", 42))
 
             def _set_seed(s):
@@ -273,8 +280,7 @@ def main() -> int:
             def _upscale_s3diff(frame_bgr):
                 import cv2 as _cv2
                 frame_rgb = _cv2.cvtColor(frame_bgr, _cv2.COLOR_BGR2RGB)
-                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device)
-                if half: im_lr = im_lr.half()
+                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device).half()
                 ori_h, ori_w = im_lr.shape[2:]
                 im_up = _F.interpolate(im_lr, size=(ori_h * scale, ori_w * scale),
                                        mode="bilinear", align_corners=False).contiguous()
@@ -284,7 +290,7 @@ def main() -> int:
                 pad_w = _math.ceil(res_w / 64) * 64 - res_w
                 im_pad = _F.pad(im_norm, (0, pad_w, 0, pad_h), mode="reflect")
                 with _torch.no_grad():
-                    deg = _net_de(im_lr).to(im_pad.device)
+                    deg = _net_de(im_lr).to(dtype=im_pad.dtype, device=im_pad.device)
                     out = _net_sr(im_pad, deg, prompt="a clear and high quality image")
                 out = out[:, :, :res_h, :res_w]
                 out_t = (out * 0.5 + 0.5).clamp(0, 1).cpu().float()
