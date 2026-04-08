@@ -260,6 +260,12 @@ def train(args: argparse.Namespace) -> None:
     trn_ds, val_ds = random_split(full_ds, [trn_len, val_len])
     LOGGER.info(f"Dataset: {trn_len} train / {val_len} val samples")
 
+    # Optionally subsample training set for faster iteration
+    if args.max_samples and args.max_samples < len(trn_ds):
+        indices = torch.randperm(len(trn_ds))[:args.max_samples].tolist()
+        trn_ds  = torch.utils.data.Subset(trn_ds, indices)
+        LOGGER.info(f"Subsampled training set to {args.max_samples} samples")
+
     trn_loader = DataLoader(
         trn_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True, drop_last=True,
@@ -286,6 +292,7 @@ def train(args: argparse.Namespace) -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimiser, T_max=args.epochs, eta_min=args.lr * 0.01
     )
+    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
 
     ckpt_dir = Path(args.ckpt_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -300,87 +307,73 @@ def train(args: argparse.Namespace) -> None:
         model.load_state_dict(ckpt["model"])
         optimiser.load_state_dict(ckpt["optimiser"])
         scheduler.load_state_dict(ckpt["scheduler"])
+        if "scaler" in ckpt:
+            scaler.load_state_dict(ckpt["scaler"])
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("best_val", float("inf"))
 
     vgg_w = float(cfg.get("training", {}).get("vgg_weight", 0.1))
 
+    steps_per_epoch = args.steps_per_epoch or len(trn_loader)
+
     for epoch in range(start_epoch, args.epochs):
         # ── Train ──────────────────────────────────────────────────────────
-        LOGGER.info(f"Epoch {epoch+1}/{args.epochs} starting ({len(trn_loader)} steps) ...")
+        LOGGER.info(f"Epoch {epoch+1}/{args.epochs} starting ({steps_per_epoch} steps) ...")
         model.train()
         trn_loss = 0.0
         t_start  = time.perf_counter()
 
-        LOGGER.info("Entering data loop ...")
         for step, (deg_window, orig_centre) in enumerate(trn_loader):
-            if step == 0:
-                LOGGER.info("First batch loaded, starting forward pass ...")
-            # deg_window : (B, T*3, H, W)
-            # orig_centre: (B, 3, H, W)
-            B  = orig_centre.size(0)
-            if step == 0: LOGGER.info(f"  B={B}, moving to device ...")
-            deg_window   = deg_window.to(device)
-            orig_centre  = orig_centre.to(device)
-            if step == 0: LOGGER.info("  tensors on device"); torch.cuda.synchronize()
+            if step >= steps_per_epoch:
+                break
 
-            # Sample random diffusion timestep
+            B  = orig_centre.size(0)
+            deg_window   = deg_window.to(device, non_blocking=True)
+            orig_centre  = orig_centre.to(device, non_blocking=True)
+
             t_idx = torch.randint(0, schedule.T, (B,), device=device)
 
-            # Forward diffusion on clean centre frame (scaled to [-1,1])
             x0    = orig_centre * 2.0 - 1.0
             x_t, noise = schedule.q_sample(x0, t_idx)
-            if step == 0: LOGGER.info("  q_sample done"); torch.cuda.synchronize()
 
-            # Degrade window to [-1,1] for conditioning
             c = T_win // 2
-            deg_cond = deg_window[:, c*3:(c+1)*3] * 2.0 - 1.0
-
             inputs = []
             for ti in range(T_win):
-                deg_i = deg_window[:, ti*3:(ti+1)*3] * 2.0 - 1.0
-                if ti == c:
-                    noised_i = x_t
-                else:
-                    noised_i = x_t
-                inputs.append(torch.cat([noised_i, deg_i], dim=1))
+                deg_i    = deg_window[:, ti*3:(ti+1)*3] * 2.0 - 1.0
+                inputs.append(torch.cat([x_t, deg_i], dim=1))
 
             model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
             t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
-            if step == 0: LOGGER.info("  model_in ready, calling model ..."); torch.cuda.synchronize()
 
-            pred_noise = model(model_in, t_rep).contiguous()  # (B*T, 3, H, W)
-            if step == 0: LOGGER.info("  forward done"); torch.cuda.synchronize()
-
-            # Only supervise on centre frame
-            pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
-
-            l1_loss  = F.l1_loss(pred_centre, noise.contiguous())
-            if step == 0: LOGGER.info("  l1 done")
-            # VGG on reconstructed x0 estimate
-            sqrt_acp = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
-            sqrt_omacp = schedule.sqrt_one_minus_acp[t_idx].view(B, 1, 1, 1)
-            x0_hat = (x_t - sqrt_omacp * pred_centre) / sqrt_acp.clamp(min=1e-8)
-            x0_hat = x0_hat.clamp(-1.0, 1.0)
-            # Convert to [0,1] for VGG
-            perc_loss = vgg_loss((x0_hat + 1) / 2, (x0 + 1) / 2)
-            if step == 0: LOGGER.info("  vgg done")
-
-            loss = l1_loss + vgg_w * perc_loss
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                pred_noise  = model(model_in, t_rep).contiguous()
+                pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
+                l1_loss     = F.l1_loss(pred_centre, noise.contiguous())
+                sqrt_acp    = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
+                sqrt_omacp  = schedule.sqrt_one_minus_acp[t_idx].view(B, 1, 1, 1)
+                x0_hat      = (x_t - sqrt_omacp * pred_centre) / sqrt_acp.clamp(min=1e-8)
+                x0_hat      = x0_hat.clamp(-1.0, 1.0)
+                perc_loss   = vgg_loss((x0_hat + 1) / 2, (x0 + 1) / 2)
+                loss        = l1_loss + vgg_w * perc_loss
 
             optimiser.zero_grad()
-            loss.backward()
-            if step == 0: LOGGER.info("  backward done")
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimiser)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimiser.step()
+            scaler.step(optimiser)
+            scaler.update()
 
             trn_loss += loss.item()
 
             if (step + 1) % args.log_every == 0:
-                avg = trn_loss / (step + 1)
+                elapsed  = time.perf_counter() - t_start
+                sps      = (step + 1) / elapsed
+                eta      = (steps_per_epoch - step - 1) / sps if sps > 0 else 0
+                avg      = trn_loss / (step + 1)
                 LOGGER.info(
-                    f"Epoch {epoch+1}/{args.epochs} step {step+1}/{len(trn_loader)} "
-                    f"loss={avg:.4f} l1={l1_loss.item():.4f} vgg={perc_loss.item():.4f}"
+                    f"Epoch {epoch+1}/{args.epochs} step {step+1}/{steps_per_epoch} "
+                    f"loss={avg:.4f} l1={l1_loss.item():.4f} vgg={perc_loss.item():.4f} "
+                    f"ETA {eta/60:.1f}min"
                 )
 
         trn_loss /= max(len(trn_loader), 1)
@@ -435,6 +428,7 @@ def train(args: argparse.Namespace) -> None:
             "model":     model.state_dict(),
             "optimiser": optimiser.state_dict(),
             "scheduler": scheduler.state_dict(),
+            "scaler":    scaler.state_dict(),
             "best_val":  best_val,
             "config":    cfg,
         }
@@ -472,9 +466,17 @@ def _parse_args() -> argparse.Namespace:
                    help="Single GPU index (e.g. --gpu 2)")
     p.add_argument("--gpus",          default=None,
                    help="Comma-separated GPU indices for DataParallel (e.g. --gpus 1,2,3,4)")
-    p.add_argument("--no-val",        action="store_true",
+    p.add_argument("--no-val",         action="store_true",
                    help="Skip validation (avoids DataParallel issues on some GPUs)")
-    p.add_argument("--verbose",       action="store_true")
+    p.add_argument("--amp",            action="store_true", default=True,
+                   help="Enable AMP fp16 training (default: on)")
+    p.add_argument("--no-amp",         dest="amp", action="store_false",
+                   help="Disable AMP")
+    p.add_argument("--max-samples",    type=int, default=None,
+                   help="Subsample dataset to N samples (e.g. 50000)")
+    p.add_argument("--steps-per-epoch", type=int, default=None,
+                   help="Cap steps per epoch regardless of dataset size")
+    p.add_argument("--verbose",        action="store_true")
     return p.parse_args()
 
 

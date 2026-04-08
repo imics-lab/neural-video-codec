@@ -78,16 +78,35 @@ def _compress_decompress(video_path: Path, cfg: Dict[str, Any]) -> List[np.ndarr
     return result["frames"]
 
 
-def _extract_original_frames(video_path: Path) -> List[np.ndarray]:
+def _extract_original_frames(video_path: Path, resolution: Optional[tuple] = None) -> List[np.ndarray]:
     cap = cv2.VideoCapture(str(video_path))
     frames = []
     while True:
         ok, frm = cap.read()
         if not ok:
             break
+        if resolution is not None:
+            frm = cv2.resize(frm, resolution, interpolation=cv2.INTER_AREA)
         frames.append(frm)
     cap.release()
     return frames
+
+
+def _resize_video_temp(video_path: Path, resolution: tuple) -> Path:
+    """Write a resized copy of the video to a temp file and return its path."""
+    import tempfile
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, resolution)
+    while True:
+        ok, frm = cap.read()
+        if not ok:
+            break
+        wtr.write(cv2.resize(frm, resolution, interpolation=cv2.INTER_AREA))
+    cap.release()
+    wtr.release()
+    return Path(tmp.name)
 
 
 def process_video(
@@ -96,6 +115,7 @@ def process_video(
     cfg: Dict[str, Any],
     patch_size: int = 256,
     patches_per_frame: int = 4,
+    resolution: Optional[tuple] = None,
 ) -> int:
     """Process one video. Returns number of pairs written."""
     stem = video_path.stem
@@ -107,8 +127,18 @@ def process_video(
     LOGGER.info(f"Processing {stem} ...")
     t0 = time.perf_counter()
 
-    original_frames = _extract_original_frames(video_path)
-    degraded_frames = _compress_decompress(video_path, cfg)
+    # Resize video before compression so DCVC artifacts match inference resolution
+    compress_path = video_path
+    if resolution is not None:
+        LOGGER.info(f"  Resizing to {resolution[0]}x{resolution[1]} before compression ...")
+        compress_path = _resize_video_temp(video_path, resolution)
+
+    original_frames = _extract_original_frames(compress_path, resolution=None)
+    degraded_frames = _compress_decompress(compress_path, cfg)
+
+    import os
+    if compress_path != video_path:
+        os.unlink(compress_path)
 
     n = min(len(original_frames), len(degraded_frames))
     if n == 0:
@@ -154,6 +184,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--config",     default="configs/gpu/compression.yaml")
     p.add_argument("--patch-size", type=int, default=256)
     p.add_argument("--patches-per-frame", type=int, default=4)
+    p.add_argument("--resolution", default="1080x720",
+                   help="Resize frames to WxH before compression (match inference resolution)")
     p.add_argument("--max-videos", type=int, default=None)
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
@@ -179,6 +211,12 @@ def main() -> int:
     if args.max_videos:
         videos = videos[:args.max_videos]
 
+    resolution = None
+    if args.resolution:
+        w, h = (int(x) for x in args.resolution.lower().split("x"))
+        resolution = (w, h)
+        print(f"Resizing all frames to {w}x{h} to match inference resolution")
+
     print(f"Found {len(videos)} videos. Output -> {output_dir}")
     total_pairs = 0
     for i, vp in enumerate(videos, 1):
@@ -186,7 +224,8 @@ def main() -> int:
         try:
             n = process_video(vp, output_dir, cfg,
                               patch_size=args.patch_size,
-                              patches_per_frame=args.patches_per_frame)
+                              patches_per_frame=args.patches_per_frame,
+                              resolution=resolution)
             total_pairs += n
         except Exception as e:
             LOGGER.error(f"Failed on {vp.name}: {e}")
