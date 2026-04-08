@@ -321,6 +321,17 @@ def main() -> int:
     else:
         _status("Step 4/4 — Upscaling SKIPPED")
 
+    # ── Cap upscaled output at 2160×1440 (preserve aspect ratio) ─────────────
+    import cv2 as _cv2
+    _MAX_W, _MAX_H = 2160, 1440
+    _oh, _ow = frames[0].shape[:2]
+    _scale_cap = min(_MAX_W / _ow, _MAX_H / _oh, 1.0)
+    if _scale_cap < 1.0:
+        _cw, _ch = int(_ow * _scale_cap), int(_oh * _scale_cap)
+        _status(f"  Capping output resolution: {_ow}×{_oh} → {_cw}×{_ch}")
+        frames = [_cv2.resize(f, (_cw, _ch), interpolation=_cv2.INTER_LANCZOS4)
+                  for f in frames]
+
     # ── Write final output ────────────────────────────────────────────────────
     from src.postprocessing.video_assembler import assemble_video
     assemble_video(iter(frames), final_out, fps=fps)
