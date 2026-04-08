@@ -121,10 +121,7 @@ class TemporalAttention(nn.Module):
 
         attn_out, _ = self.attn(
             x_norm, x_norm, x_norm,
-            attn_mask=attn_bias.expand(B * H * W, T, T) if False else None,
-            # Note: MultiheadAttention attn_mask is (L,S) or (B*heads,L,S);
-            # we skip it here and rely on the learnable pos_bias implicitly
-            # via the MHA's own learned weights.
+            attn_mask=attn_bias.expand(B * H * W, T, T),
         )
 
         x_flat = x_flat + attn_out                       # residual
