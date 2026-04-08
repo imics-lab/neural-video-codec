@@ -211,7 +211,10 @@ def main() -> int:
 
     if upscale_enabled:
         upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
-        scale = int(upscale_cfg.get("scale", 4))
+        # Compute integer scale so output reaches ~2160×1440 target resolution.
+        _TARGET_W, _TARGET_H = 2160, 1440
+        _ih, _iw = frames[0].shape[:2]
+        scale = max(1, min(_TARGET_W // _iw, _TARGET_H // _ih))
         t3 = time.perf_counter()
 
         if args.use_s3diff:
@@ -320,17 +323,6 @@ def main() -> int:
                 f"{frames[0].shape[1]}×{frames[0].shape[0]})")
     else:
         _status("Step 4/4 — Upscaling SKIPPED")
-
-    # ── Cap upscaled output at 2160×1440 (preserve aspect ratio) ─────────────
-    import cv2 as _cv2
-    _MAX_W, _MAX_H = 2160, 1440
-    _oh, _ow = frames[0].shape[:2]
-    _scale_cap = min(_MAX_W / _ow, _MAX_H / _oh, 1.0)
-    if _scale_cap < 1.0:
-        _cw, _ch = int(_ow * _scale_cap), int(_oh * _scale_cap)
-        _status(f"  Capping output resolution: {_ow}×{_oh} → {_cw}×{_ch}")
-        frames = [_cv2.resize(f, (_cw, _ch), interpolation=_cv2.INTER_LANCZOS4)
-                  for f in frames]
 
     # ── Write final output ────────────────────────────────────────────────────
     from src.postprocessing.video_assembler import assemble_video
