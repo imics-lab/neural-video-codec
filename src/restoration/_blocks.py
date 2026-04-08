@@ -121,7 +121,7 @@ class TemporalAttention(nn.Module):
 
         attn_out, _ = self.attn(
             x_norm, x_norm, x_norm,
-            attn_mask=attn_bias.expand(B * H * W, T, T),
+            attn_mask=attn_bias.expand(B * H * W * self.attn.num_heads, T, T),
         )
 
         x_flat = x_flat + attn_out                       # residual
