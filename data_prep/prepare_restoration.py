@@ -92,18 +92,26 @@ def _extract_original_frames(video_path: Path, resolution: Optional[tuple] = Non
     return frames
 
 
-def _resize_video_temp(video_path: Path, resolution: tuple) -> Path:
-    """Write a resized copy of the video to a temp file and return its path."""
+def _resize_video_temp(video_path: Path, resolution: Optional[tuple], max_frames: Optional[int] = None) -> Path:
+    """Write a resized/trimmed copy of the video to a temp file and return its path."""
     import tempfile
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if resolution is None:
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        resolution = (w, h)
     tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, resolution)
+    count = 0
     while True:
         ok, frm = cap.read()
         if not ok:
             break
         wtr.write(cv2.resize(frm, resolution, interpolation=cv2.INTER_AREA))
+        count += 1
+        if max_frames and count >= max_frames:
+            break
     cap.release()
     wtr.release()
     return Path(tmp.name)
@@ -116,11 +124,19 @@ def process_video(
     patch_size: int = 256,
     patches_per_frame: int = 4,
     resolution: Optional[tuple] = None,
+    max_frames: Optional[int] = None,
 ) -> int:
     """Process one video. Returns number of pairs written."""
     stem = video_path.stem
     orig_dir = output_dir / "original" / stem
     deg_dir  = output_dir / "degraded" / stem
+
+    # Skip if already processed
+    if orig_dir.exists() and any(orig_dir.iterdir()):
+        existing = sum(1 for _ in orig_dir.glob("*.png"))
+        LOGGER.info(f"Skipping {stem} — already has {existing} pairs")
+        return existing
+
     orig_dir.mkdir(parents=True, exist_ok=True)
     deg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,9 +145,9 @@ def process_video(
 
     # Resize video before compression so DCVC artifacts match inference resolution
     compress_path = video_path
-    if resolution is not None:
-        LOGGER.info(f"  Resizing to {resolution[0]}x{resolution[1]} before compression ...")
-        compress_path = _resize_video_temp(video_path, resolution)
+    if resolution is not None or max_frames is not None:
+        LOGGER.info(f"  Preparing input (resolution={resolution}, max_frames={max_frames}) ...")
+        compress_path = _resize_video_temp(video_path, resolution, max_frames=max_frames)
 
     original_frames = _extract_original_frames(compress_path, resolution=None)
     degraded_frames = _compress_decompress(compress_path, cfg)
@@ -186,6 +202,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--patches-per-frame", type=int, default=4)
     p.add_argument("--resolution", default="1080x720",
                    help="Resize frames to WxH before compression (match inference resolution)")
+    p.add_argument("--max-frames-per-video", type=int, default=150,
+                   help="Limit frames per video fed to DCVC (default 150 = 5s at 30fps)")
     p.add_argument("--max-videos", type=int, default=None)
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
@@ -225,7 +243,8 @@ def main() -> int:
             n = process_video(vp, output_dir, cfg,
                               patch_size=args.patch_size,
                               patches_per_frame=args.patches_per_frame,
-                              resolution=resolution)
+                              resolution=resolution,
+                              max_frames=args.max_frames_per_video)
             total_pairs += n
         except Exception as e:
             LOGGER.error(f"Failed on {vp.name}: {e}")
