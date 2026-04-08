@@ -35,18 +35,7 @@ def restore_frames(
     cfg_node = OmegaConf.create(cfg)
     restorer = Restorer(cfg_node)
 
-    input_scale = float(cfg.get("input_scale", 1.0))
-    orig_size = None
-    if input_scale < 1.0 and frames:
-        h, w = frames[0].shape[:2]
-        orig_size = (w, h)
-        th, tw = int(h * input_scale), int(w * input_scale)
-        frames = [cv2.resize(f, (tw, th), interpolation=cv2.INTER_AREA) for f in frames]
-
     restored = restorer.restore_sequence(frames)
-
-    if orig_size is not None:
-        restored = [cv2.resize(f, orig_size, interpolation=cv2.INTER_LINEAR) for f in restored]
 
     if progress_cb is not None:
         for _ in restored:

@@ -16,7 +16,6 @@ inference:
   tile_overlap: 64             # overlap between tiles for Gaussian blending
   color_fix: true              # shift tile means to match LR color structure
   batch_size: 2                # window batches processed at once
-  input_scale: 0.5             # downscale before restoration (S3Diff upscales after)
 
 output:
   out_dir: "outputs/restoration"

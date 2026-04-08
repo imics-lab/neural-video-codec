@@ -1,8 +1,8 @@
 input:
   video_path: ""               # override via --video CLI argument
-  # Set to < 1.0 to downscale input before compression (eval mode: GT = original).
-  # e.g. 0.5 means 1080p → 540p → pipeline → 1080p; compare with original 1080p.
-  downscale_input: 1.0
+  # Resize input to this exact resolution before compression.
+  # "WxH" string, e.g. "1080x720". Leave empty to keep original size.
+  input_resolution: "1080x720"
 
 compression:
   config: "configs/gpu/compression.yaml"

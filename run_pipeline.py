@@ -104,9 +104,7 @@ def main() -> int:
         print(f"ERROR: Video not found: {video_path}", file=sys.stderr)
         return 1
 
-    downscale = args.downscale or float(
-        (pipeline_cfg.get("input", {}) or {}).get("downscale_input", 1.0)
-    )
+    _input_res = (pipeline_cfg.get("input", {}) or {}).get("input_resolution", "") or ""
     save_intermediate = args.save_intermediate or bool(
         (pipeline_cfg.get("output", {}) or {}).get("save_intermediate", False)
     )
@@ -125,21 +123,20 @@ def main() -> int:
     _status("Step 1/4 — Compressing ...")
     t0 = time.perf_counter()
 
-    # Apply downscale for eval mode
+    # Resize input to target resolution before compression
     actual_video = video_path
-    if abs(downscale - 1.0) > 1e-4:
-        _status(f"  Downscaling input by {downscale}×")
+    if _input_res:
         import tempfile, cv2
+        _tw, _th = (int(x) for x in _input_res.lower().split("x"))
         cap = cv2.VideoCapture(str(video_path))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)  * downscale)
-        H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) * downscale)
+        _status(f"  Resizing input to {_tw}×{_th}")
         tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+        wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, (_tw, _th))
         while True:
             ok, frm = cap.read()
             if not ok: break
-            wtr.write(cv2.resize(frm, (W, H), interpolation=cv2.INTER_AREA))
+            wtr.write(cv2.resize(frm, (_tw, _th), interpolation=cv2.INTER_AREA))
         cap.release(); wtr.release()
         actual_video = Path(tmp.name)
 
@@ -211,10 +208,10 @@ def main() -> int:
 
     if upscale_enabled:
         upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
-        # Compute integer scale so output reaches ~2160×1440 target resolution.
-        _TARGET_W, _TARGET_H = 2160, 1440
-        _ih, _iw = frames[0].shape[:2]
-        scale = max(1, min(_TARGET_W // _iw, _TARGET_H // _ih))
+        # Compute integer scale so output height reaches ~1440 target.
+        _TARGET_H = 1440
+        _ih = frames[0].shape[0]
+        scale = max(1, round(_TARGET_H / _ih))
         t3 = time.perf_counter()
 
         if args.use_s3diff:
