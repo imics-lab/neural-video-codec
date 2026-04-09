@@ -88,7 +88,7 @@ class Restorer:
             n_heads=mcfg.get("n_heads", config.model.n_heads),
         )
         self.model.load_state_dict(state)
-        self.model.to(self.device).eval()
+        self.model.to(self.device).half().eval()
 
         T_diff = getattr(config.model, "timesteps", 1000)
         self.diffusion = GaussianDiffusion(T=T_diff)
@@ -113,8 +113,8 @@ class Restorer:
         if N == 0:
             return []
 
-        # Pre-convert all frames to tensors
-        deg_tensors = [_to_tensor(f).to(self.device) for f in degraded_frames]
+        # Pre-convert all frames to tensors (fp16 to match model)
+        deg_tensors = [_to_tensor(f).to(self.device, dtype=torch.float16) for f in degraded_frames]
 
         T          = self.T
         half       = T // 2
@@ -229,7 +229,9 @@ class Restorer:
             t_batch = torch.full((T,), t_cur, device=self.device, dtype=torch.long)
 
             inp     = torch.cat([x, cond], dim=1)       # (T, 6, H, W)
-            eps_hat = self.model(inp, t_batch)           # (T, 3, H, W)
+            with torch.cuda.amp.autocast():
+                eps_hat = self.model(inp, t_batch)      # (T, 3, H, W)
+            eps_hat = eps_hat.to(x.dtype)
 
             ab_t    = ab[t_cur]
             ab_prev = ab[t_next]

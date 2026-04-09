@@ -267,10 +267,10 @@ def main() -> int:
             _de_ckpt = _torch.load(str(DE_NET_PATH), map_location="cpu")
             _net_de.load_state_dict(_de_ckpt.get("state_dict", _de_ckpt))
             _net_de.to(_upscale_device).half().eval()
-            # Option 5: torch.compile — ~20-40% speedup after first-frame warmup
+            # torch.compile with default mode (no CUDA graphs — de_net stacking breaks reduce-overhead)
             _status("  Compiling models with torch.compile ...")
-            _net_sr = _torch.compile(_net_sr, mode="reduce-overhead")
-            _net_de = _torch.compile(_net_de, mode="reduce-overhead")
+            _net_sr = _torch.compile(_net_sr, mode="default")
+            _net_de = _torch.compile(_net_de, mode="default")
             seed = int(upscale_cfg.get("seed", 42))
 
             def _set_seed(s):
