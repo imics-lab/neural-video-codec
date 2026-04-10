@@ -208,10 +208,7 @@ def main() -> int:
 
     if upscale_enabled:
         upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
-        # Compute integer scale so output height reaches ~1440 target.
-        _TARGET_H = 1440
-        _ih = frames[0].shape[0]
-        scale = max(1, round(_TARGET_H / _ih))
+        _OUT_W, _OUT_H = 2160, 1440   # fixed output resolution for upscaled video
         t3 = time.perf_counter()
 
         if args.use_s3diff:
@@ -260,9 +257,8 @@ def main() -> int:
                               sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
             _net_sr.set_eval()
             _net_sr = _net_sr.cuda()
-            # Option 1: half precision — ~1.5-2× speedup on Blackwell tensor cores
-            half = True
-            _net_sr.half()
+            # DEResNet is safe to run fp16; S3Diff VAE has fp32/fp16 mixed internals
+            # so we use autocast rather than .half() on _net_sr
             _net_de = _DEResNet(num_in_ch=3, num_degradation=2)
             _de_ckpt = _torch.load(str(DE_NET_PATH), map_location="cpu")
             _net_de.load_state_dict(_de_ckpt.get("state_dict", _de_ckpt))
@@ -276,18 +272,17 @@ def main() -> int:
             def _upscale_s3diff(frame_bgr):
                 import cv2 as _cv2
                 frame_rgb = _cv2.cvtColor(frame_bgr, _cv2.COLOR_BGR2RGB)
-                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device).half()
-                ori_h, ori_w = im_lr.shape[2:]
-                im_up = _F.interpolate(im_lr, size=(ori_h * scale, ori_w * scale),
+                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device)
+                im_up = _F.interpolate(im_lr, size=(_OUT_H, _OUT_W),
                                        mode="bilinear", align_corners=False).contiguous()
                 im_norm = (im_up * 2.0 - 1.0).clamp(-1.0, 1.0)
-                res_h, res_w = im_norm.shape[2:]
+                res_h, res_w = _OUT_H, _OUT_W
                 pad_h = _math.ceil(res_h / 64) * 64 - res_h
                 pad_w = _math.ceil(res_w / 64) * 64 - res_w
                 im_pad = _F.pad(im_norm, (0, pad_w, 0, pad_h), mode="reflect")
-                with _torch.no_grad():
-                    deg = _net_de(im_lr).to(dtype=im_pad.dtype, device=im_pad.device)
-                    out = _net_sr(im_pad, deg, prompt="a clear and high quality image")
+                with _torch.no_grad(), _torch.cuda.amp.autocast():
+                    deg = _net_de(im_lr.half()).to(device=im_pad.device)
+                    out = _net_sr(im_pad, deg.float(), prompt="a clear and high quality image")
                 out = out[:, :, :res_h, :res_w]
                 out_t = (out * 0.5 + 0.5).clamp(0, 1).cpu().float()
                 out_np = (out_t[0].permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(_np.uint8)
@@ -306,9 +301,7 @@ def main() -> int:
         else:
             _status("Step 4/4 — Upscaling (Lanczos bicubic) ...")
             import cv2 as _cv2
-            h0, w0 = frames[0].shape[:2]
-            th, tw = h0 * scale, w0 * scale
-            frames = [_cv2.resize(f, (tw, th), interpolation=_cv2.INTER_LANCZOS4)
+            frames = [_cv2.resize(f, (_OUT_W, _OUT_H), interpolation=_cv2.INTER_LANCZOS4)
                       for f in frames]
 
         _status(f"  Upscaling done in {time.perf_counter()-t3:.1f}s  "
