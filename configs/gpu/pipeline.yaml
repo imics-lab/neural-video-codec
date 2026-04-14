@@ -2,7 +2,7 @@ input:
   video_path: ""               # override via --video CLI argument
   # Resize input to this exact resolution before compression.
   # "WxH" string, e.g. "1080x720". Leave empty to keep original size.
-  input_resolution: "1080x720"
+  input_resolution: "480x360"
 
 compression:
   config: "configs/gpu/compression.yaml"

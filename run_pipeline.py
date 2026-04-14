@@ -208,7 +208,7 @@ def main() -> int:
 
     if upscale_enabled:
         upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
-        _OUT_W, _OUT_H = 2160, 1440   # fixed output resolution for upscaled video
+        _OUT_W, _OUT_H = 960, 720   # fixed output resolution for upscaled video
         t3 = time.perf_counter()
 
         if args.use_s3diff:

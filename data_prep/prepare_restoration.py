@@ -200,7 +200,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--config",     default="configs/gpu/compression.yaml")
     p.add_argument("--patch-size", type=int, default=256)
     p.add_argument("--patches-per-frame", type=int, default=4)
-    p.add_argument("--resolution", default="1080x720",
+    p.add_argument("--resolution", default="480x360",
                    help="Resize frames to WxH before compression (match inference resolution)")
     p.add_argument("--max-frames-per-video", type=int, default=150,
                    help="Limit frames per video fed to DCVC (default 150 = 5s at 30fps)")
