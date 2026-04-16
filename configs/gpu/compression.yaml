@@ -1,5 +1,5 @@
 detection:
-  model_path: "models/md_v5a.0.pt"
+  model_path: "models/md_v5a.0.0.pt"
   variant: "megadetector"
   device: "cuda:0"
   half: true

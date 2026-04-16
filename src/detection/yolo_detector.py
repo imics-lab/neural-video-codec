@@ -28,7 +28,7 @@ import numpy as np
 _DEFAULT_ANIMAL_CLASSES: Set[int] = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
 
 _MD_V5A_URL = (
-    "https://github.com/agentmorris/MegaDetector/releases/download/v5.0/md_v5a.0.pt"
+    "https://github.com/agentmorris/MegaDetector/releases/download/v5.0/md_v5a.0.0.pt"
 )
 
 
