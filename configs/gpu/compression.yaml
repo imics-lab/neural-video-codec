@@ -3,7 +3,7 @@ detection:
   variant: "yolov9c"
   device: "cuda:0"
   half: true
-  processing_scale: 0.50       # run detector at this fraction of input resolution
+  processing_scale: 1.00       # run detector at full input resolution (important at low res)
   imgsz: 640
   conf: 0.25
   iou_nms: 0.50
