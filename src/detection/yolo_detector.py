@@ -1,5 +1,9 @@
 """
-YOLO11 animal detector with KLT-based inter-frame tracking (pure module).
+Animal detector with KLT-based inter-frame tracking (pure module).
+
+Supports two backends:
+  - yolov9c  : ultralytics YOLO (COCO classes, default)
+  - megadetector : MegaDetector v5a (Microsoft CameraTraps, class 0=animal)
 
 Rules:
 - No filesystem writes.
@@ -11,6 +15,7 @@ Public API:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import cv2
@@ -21,6 +26,10 @@ import numpy as np
 # bird=14, cat=15, dog=16, horse=17, sheep=18, cow=19,
 # elephant=20, bear=21, zebra=22, giraffe=23
 _DEFAULT_ANIMAL_CLASSES: Set[int] = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+
+_MD_V5A_URL = (
+    "https://github.com/microsoft/CameraTraps/releases/download/v5.0/md_v5a.0.pt"
+)
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -183,6 +192,45 @@ def _detect_boxes(
     return out_boxes, out_confs, out_cls
 
 
+# ── MegaDetector helpers ──────────────────────────────────────────────────────
+
+def _ensure_megadetector(model_path: str) -> str:
+    """Download md_v5a.0.pt if not present."""
+    p = Path(model_path)
+    if not p.exists():
+        import urllib.request
+        p.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading MegaDetector v5a → {p} ...")
+        urllib.request.urlretrieve(_MD_V5A_URL, str(p))
+    return str(p)
+
+
+def _detect_boxes_md(
+    model,
+    frame_bgr: np.ndarray,
+    conf_thr: float,
+    pad_frac: float,
+    pad_px: float,
+) -> Tuple[List[Tuple[float, float, float, float]], List[float], List[int]]:
+    """Run MegaDetector v5 (torch.hub YOLOv5), keep class 0 (animal) only."""
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    results = model(frame_rgb)
+    preds = results.xyxy[0].cpu().numpy()  # [x1,y1,x2,y2,conf,cls]
+    h, w = frame_bgr.shape[:2]
+    out_boxes, out_confs, out_cls = [], [], []
+    for x1, y1, x2, y2, sc, c in preds:
+        if float(sc) < conf_thr:
+            continue
+        if int(c) != 0:          # 0=animal, 1=person, 2=vehicle
+            continue
+        box = _clip_xyxy((float(x1), float(y1), float(x2), float(y2)), w, h)
+        box = _expand_box(box, pad_frac, pad_px, w, h)
+        out_boxes.append(box)
+        out_confs.append(float(sc))
+        out_cls.append(0)
+    return out_boxes, out_confs, out_cls
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def run_detection(
@@ -207,13 +255,12 @@ def run_detection(
             }
         }
     """
-    from ultralytics import YOLO  # deferred to keep module import fast
-
     model_path = config.get("model_path")
     if not model_path:
         raise ValueError("config['model_path'] is required")
 
     rt = config
+    variant   = str(rt.get("variant", "yolo")).lower()
     device    = rt.get("device", 0)
     half      = bool(rt.get("half", False))
     imgsz     = int(rt.get("imgsz", 640))
@@ -240,7 +287,20 @@ def run_detection(
     klt_max    = int(tr.get("klt_max_points", 80))
     klt_min    = int(tr.get("klt_min_points", 10))
 
-    model = YOLO(model_path, task="detect", verbose=False)
+    use_md = (variant == "megadetector")
+    if use_md:
+        import torch
+        model_path = _ensure_megadetector(model_path)
+        model = torch.hub.load("ultralytics/yolov5", "custom",
+                               path=model_path, force_reload=False, verbose=False)
+        model.conf = conf_thr
+        dev = device if isinstance(device, str) else f"cuda:{device}"
+        model.to(dev)
+        if half:
+            model.half()
+    else:
+        from ultralytics import YOLO  # deferred to keep module import fast
+        model = YOLO(model_path, task="detect", verbose=False)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -284,10 +344,15 @@ def run_detection(
                 # Retire stale tracks
                 tracks = [t for t in tracks if (frame_idx - t.last_det_frame) <= max_gap]
 
-                det_boxes, det_confs, det_cls = _detect_boxes(
-                    model, frame_p, imgsz, conf_thr, iou_thr,
-                    device, half, animal_classes, pad_frac, pad_px,
-                )
+                if use_md:
+                    det_boxes, det_confs, det_cls = _detect_boxes_md(
+                        model, frame_p, conf_thr, pad_frac, pad_px,
+                    )
+                else:
+                    det_boxes, det_confs, det_cls = _detect_boxes(
+                        model, frame_p, imgsz, conf_thr, iou_thr,
+                        device, half, animal_classes, pad_frac, pad_px,
+                    )
 
                 if track_en:
                     matches, unmatched_d, unmatched_t = _match_greedy(det_boxes, tracks, match_iou)
@@ -315,12 +380,13 @@ def run_detection(
 
                     for di in unmatched_d:
                         cid = det_cls[di]
+                        label = "animal" if use_md else _COCO_NAMES.get(cid, str(cid))
                         t = _Track(
                             track_id=next_id,
                             bbox=det_boxes[di],
                             conf=det_confs[di],
                             cls=cid,
-                            label=_COCO_NAMES.get(cid, str(cid)),
+                            label=label,
                             last_det_frame=frame_idx,
                             confirmed=(min_hits <= 1),
                         )

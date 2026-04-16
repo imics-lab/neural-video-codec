@@ -1,14 +1,12 @@
 detection:
-  model_path: "models/MDV6-yolov9-c.pt"
-  variant: "yolov9c"
+  model_path: "models/md_v5a.0.pt"
+  variant: "megadetector"
   device: "cuda:0"
   half: true
   processing_scale: 1.00       # run detector at full input resolution (important at low res)
   imgsz: 640
   conf: 0.25
   iou_nms: 0.50
-  # COCO animal class IDs: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
-  animal_classes: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
   bbox_pad_frac: 0.10          # expand each bbox by this fraction of its own size
   bbox_pad_px: 8               # additional fixed-pixel padding
   keyframe_interval: 15        # run full YOLO every N frames; track between keyframes
