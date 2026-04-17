@@ -289,10 +289,12 @@ def run_detection(
 
     use_md = (variant == "megadetector")
     if use_md:
-        import torch
+        import torch, warnings
         model_path = _ensure_megadetector(model_path)
-        model = torch.hub.load("ultralytics/yolov5", "custom",
-                               path=model_path, force_reload=False, verbose=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = torch.hub.load("ultralytics/yolov5", "custom",
+                                   path=model_path, force_reload=False, verbose=False)
         model.conf = conf_thr
         dev = device if isinstance(device, str) else f"cuda:{device}"
         model.to(dev)
