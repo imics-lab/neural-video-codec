@@ -286,7 +286,7 @@ def main() -> int:
                 pad_h = _math.ceil(res_h / 64) * 64 - res_h
                 pad_w = _math.ceil(res_w / 64) * 64 - res_w
                 im_pad = _F.pad(im_norm, (0, pad_w, 0, pad_h), mode="reflect")
-                with _torch.no_grad(), _torch.cuda.amp.autocast():
+                with _torch.no_grad(), _torch.amp.autocast("cuda"):
                     deg = _net_de(im_lr.half()).to(device=im_pad.device)
                     out = _net_sr(im_pad, deg.float(), prompt="a clear and high quality image")
                 out = out[:, :, :res_h, :res_w]

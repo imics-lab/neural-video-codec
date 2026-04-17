@@ -292,7 +292,7 @@ def train(args: argparse.Namespace) -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimiser, T_max=args.epochs, eta_min=args.lr * 0.01
     )
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
 
     ckpt_dir = Path(args.ckpt_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -345,7 +345,7 @@ def train(args: argparse.Namespace) -> None:
             model_in = torch.stack(inputs, dim=1).view(B * T_win, 6, *x_t.shape[-2:])
             t_rep    = t_idx.unsqueeze(1).expand(B, T_win).reshape(B * T_win)
 
-            with torch.cuda.amp.autocast(enabled=args.amp):
+            with torch.amp.autocast("cuda", enabled=args.amp):
                 pred_noise  = model(model_in, t_rep).contiguous()
                 pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
                 l1_loss     = F.l1_loss(pred_centre, noise.contiguous())

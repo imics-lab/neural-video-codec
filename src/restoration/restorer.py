@@ -229,7 +229,7 @@ class Restorer:
             t_batch = torch.full((T,), t_cur, device=self.device, dtype=torch.long)
 
             inp     = torch.cat([x, cond], dim=1)       # (T, 6, H, W)
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 eps_hat = self.model(inp, t_batch)      # (T, 3, H, W)
             eps_hat = eps_hat.to(x.dtype)
 
