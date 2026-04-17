@@ -357,10 +357,8 @@ def run_detection(
                 if track_en:
                     matches, unmatched_d, unmatched_t = _match_greedy(det_boxes, tracks, match_iou)
 
-                    # Prune unmatched existing tracks (detector is authoritative at keyframes)
+                    # Update matched tracks first (ti indexes the original tracks list)
                     matched_t_idx = {j for _, j in matches}
-                    tracks = [tracks[j] for j in range(len(tracks)) if j in matched_t_idx]
-
                     for di, ti in matches:
                         t = tracks[ti]
                         nb = det_boxes[di]
@@ -377,6 +375,9 @@ def run_detection(
                         t.hits += 1
                         if t.hits >= min_hits:
                             t.confirmed = True
+
+                    # Prune unmatched tracks after updating (detector is authoritative at keyframes)
+                    tracks = [tracks[j] for j in range(len(tracks)) if j in matched_t_idx]
 
                     for di in unmatched_d:
                         cid = det_cls[di]
