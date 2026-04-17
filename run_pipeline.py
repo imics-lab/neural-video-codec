@@ -140,6 +140,12 @@ def main() -> int:
         cap.release(); wtr.release()
         actual_video = Path(tmp.name)
 
+        if save_intermediate:
+            import shutil
+            orig_path = out_dir / f"{stem}_original.mp4"
+            shutil.copy2(tmp.name, str(orig_path))
+            _status(f"  Resized original saved → {orig_path}")
+
     comp_cfg = _merge_sub_config(pipeline_cfg, "compression")
     from src.compression.phase_compress import compress_video
     archive_bytes = compress_video(str(actual_video), comp_cfg)
