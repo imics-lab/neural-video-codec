@@ -31,8 +31,8 @@ compression:
   quality:
     roi_qp_i: 63               # high quality for ROI I-frames
     roi_qp_p: 63               # high quality for ROI P-frames
-    bg_qp_i: 25                # lower quality for background I-frames
-    bg_qp_p: 25                # lower quality for background P-frames
+    bg_qp_i: 5                 # aggressive background compression (0=worst, 63=best)
+    bg_qp_p: 5                 # aggressive background compression (0=worst, 63=best)
   roi:
     dilate_px: 8               # dilate ROI mask before stream split
     min_conf: 0.25             # minimum detection confidence to include in ROI
