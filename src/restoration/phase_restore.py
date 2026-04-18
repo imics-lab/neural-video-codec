@@ -16,29 +16,52 @@ def restore_frames(
     frames: List[np.ndarray],
     cfg: Dict[str, Any],
     progress_cb: Optional[Callable[[int], None]] = None,
+    detections: Optional[Dict[str, Any]] = None,
+    width: int = 0,
+    height: int = 0,
 ) -> List[np.ndarray]:
     """
-    Apply Model R (temporal-attention diffusion restoration) to a sequence.
+    Apply Model R restoration, then blend ROI and BG with different strengths.
+
+    ROI pixels: strength * restored + (1 - strength) * decompressed
+    BG pixels:  fully restored
 
     Args:
-        frames:      List of BGR uint8 arrays (degraded, from DCVC decompression).
+        frames:      List of BGR uint8 arrays (from DCVC decompression).
         cfg:         Restoration config dict.
-        progress_cb: Called with 1 after each restored frame.
-
-    Returns:
-        List of restored BGR uint8 arrays, same length.
+        detections:  ROI detection dict from archive {frame_idx -> [boxes]}.
+        width/height: Frame dimensions for mask building.
     """
-    import cv2
-
     from .restorer import Restorer
 
     cfg_node = OmegaConf.create(cfg)
     restorer = Restorer(cfg_node)
-
     restored = restorer.restore_sequence(frames)
 
+    # Blend: ROI gets partial restoration, BG gets full restoration
+    if detections and width > 0 and height > 0:
+        from ..roi_masking.roi_masking import build_frame_mask, mask_to_alpha
+        roi_strength = float(cfg.get("inference", {}).get("roi_restore_strength", 0.3))
+        result = []
+        for fi, (decomp_f, rest_f) in enumerate(zip(frames, restored)):
+            mask  = build_frame_mask(frame_idx=fi, width=width, height=height,
+                                     roi_map=detections, min_conf=0.0, dilate_px=0)
+            alpha = mask_to_alpha(mask, feather_px=8)[..., None]  # (H, W, 1)
+            # alpha=1 in ROI, 0 in BG
+            # ROI: lerp(decompressed, restored, roi_strength)
+            # BG:  fully restored
+            blend_weight = alpha * roi_strength + (1.0 - alpha) * 1.0
+            out = np.clip(
+                decomp_f.astype(np.float32) * (1.0 - blend_weight)
+                + rest_f.astype(np.float32) * blend_weight,
+                0, 255
+            ).astype(np.uint8)
+            result.append(out)
+    else:
+        result = restored
+
     if progress_cb is not None:
-        for _ in restored:
+        for _ in result:
             progress_cb(1)
 
-    return restored
+    return result

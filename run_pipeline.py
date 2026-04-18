@@ -165,9 +165,14 @@ def main() -> int:
 
     decomp_cfg = _merge_sub_config(pipeline_cfg, "decompression")
     from src.decompression.phase_decompress import decompress_archive
+    import zipfile as _zf, json as _json
+    with _zf.ZipFile(__import__('io').BytesIO(archive_bytes)) as _arc:
+        _detections = _json.loads(_arc.read("detections.json"))
     decomp_result = decompress_archive(archive_bytes, decomp_cfg)
     frames = decomp_result["frames"]
     fps    = decomp_result["fps"]
+    _width  = decomp_result.get("width", 0)
+    _height = decomp_result.get("height", 0)
 
     if save_intermediate:
         from src.postprocessing.video_assembler import assemble_video
@@ -194,7 +199,8 @@ def main() -> int:
         t2 = time.perf_counter()
         restore_cfg = _merge_sub_config(pipeline_cfg, "restoration")
         from src.restoration.phase_restore import restore_frames
-        frames = restore_frames(frames, restore_cfg)
+        frames = restore_frames(frames, restore_cfg,
+                                detections=_detections, width=_width, height=_height)
 
         if save_intermediate:
             from src.postprocessing.video_assembler import assemble_video
