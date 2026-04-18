@@ -237,6 +237,78 @@ def _build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
     return model.to(device)
 
 
+@torch.no_grad()
+def _save_samples(
+    model: nn.Module,
+    schedule: "DiffusionSchedule",
+    val_ds: Dataset,
+    device: torch.device,
+    out_dir: Path,
+    epoch: int,
+    n_samples: int = 4,
+    t_start: int = 200,
+    ddim_steps: int = 20,
+) -> None:
+    """Run DDIM inference on a few val samples and save degraded|restored|original."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    eval_model = model.module if isinstance(model, nn.DataParallel) else model
+    eval_model.eval()
+
+    ab = schedule.alphas_cumprod.to(device)
+    indices = list(range(min(n_samples, len(val_ds))))
+    step_idx = torch.linspace(t_start, 0, ddim_steps + 1).long()
+
+    for si, idx in enumerate(indices):
+        deg_window, orig_centre = val_ds[idx]           # (T*3, H, W), (3, H, W)
+        T_win = deg_window.shape[0] // 3
+        half  = T_win // 2
+
+        deg_window  = deg_window.to(device).unsqueeze(0)   # (1, T*3, H, W)
+        orig_centre = orig_centre.to(device)
+
+        # Build degraded frames as conditioning
+        cond_frames = [deg_window[:, ti*3:(ti+1)*3] for ti in range(T_win)]
+        centre_deg  = cond_frames[half].squeeze(0)          # (3, H, W)
+
+        # Inject noise at t_start on the centre degraded frame
+        gen = torch.Generator(device=device).manual_seed(idx)
+        noise = torch.randn(1, 3, *centre_deg.shape[-2:], device=device, generator=gen)
+        ab_s = ab[t_start]
+        x = ab_s.sqrt() * (centre_deg.unsqueeze(0) * 2 - 1) + (1 - ab_s).sqrt() * noise
+
+        # DDIM loop
+        for i in range(ddim_steps):
+            t_cur  = int(step_idx[i].item())
+            t_next = int(step_idx[i + 1].item())
+            t_b    = torch.full((T_win,), t_cur, device=device, dtype=torch.long)
+            inp_list = [torch.cat([x, (cond_frames[ti] * 2 - 1)], dim=1) for ti in range(T_win)]
+            model_in = torch.cat(inp_list, dim=0)            # (T, 6, H, W)
+            with torch.amp.autocast("cuda"):
+                eps = eval_model(model_in, t_b)
+            eps_c    = eps[half:half+1]
+            ab_t     = ab[t_cur];  ab_p = ab[t_next]
+            x0_pred  = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
+            x0_pred  = x0_pred.clamp(-1, 2)
+            x        = ab_p.sqrt() * x0_pred + (1 - ab_p).sqrt() * eps_c
+
+        restored = x.squeeze(0).clamp(0, 1)                 # (3, H, W)
+
+        def _to_np(t):
+            return (t.permute(1, 2, 0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+        deg_np  = _to_np(centre_deg)
+        rest_np = _to_np(restored)
+        orig_np = _to_np(orig_centre)
+
+        # Save side-by-side: degraded | restored | original
+        grid = np.concatenate([deg_np, rest_np, orig_np], axis=1)
+        path = out_dir / f"epoch{epoch+1:04d}_sample{si:02d}.png"
+        cv2.imwrite(str(path), cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
+
+    eval_model.train()
+    LOGGER.info(f"  Samples saved → {out_dir}/epoch{epoch+1:04d}_*.png")
+
+
 def train(args: argparse.Namespace) -> None:
     cfg    = _load_config(args.config)
     gpu_ids = None
@@ -437,6 +509,15 @@ def train(args: argparse.Namespace) -> None:
             torch.save(state, ckpt_dir / "best.pt")
             LOGGER.info(f"  *** New best val={best_val:.4f} → saved best.pt")
 
+        # ── Visual samples ─────────────────────────────────────────────────
+        if args.sample_every > 0 and (epoch + 1) % args.sample_every == 0:
+            _save_samples(
+                model, schedule, val_ds, device,
+                out_dir=ckpt_dir / "samples",
+                epoch=epoch,
+                n_samples=args.num_samples,
+            )
+
         if (epoch + 1) % args.save_every == 0:
             torch.save(state, ckpt_dir / f"epoch_{epoch+1:04d}.pt")
 
@@ -474,6 +555,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Disable AMP")
     p.add_argument("--max-samples",    type=int, default=None,
                    help="Subsample dataset to N samples (e.g. 50000)")
+    p.add_argument("--sample-every",   type=int, default=10,
+                   help="Save visual samples every N epochs (0 = disable)")
+    p.add_argument("--num-samples",    type=int, default=4,
+                   help="Number of validation samples to visualize")
     p.add_argument("--steps-per-epoch", type=int, default=None,
                    help="Cap steps per epoch regardless of dataset size")
     p.add_argument("--verbose",        action="store_true")
