@@ -142,11 +142,16 @@ class Restorer:
             if tile_sz > 0 and (H > tile_sz or W > tile_sz):
                 # Tiled path: fall back to per-frame to keep memory bounded
                 for i, centre in enumerate(centres):
-                    restored[centre] = self._restore_window(windows[i], half)
+                    restored[centre] = self._restore_window(windows[i], half, frame_idx=centre)
             else:
                 t_s  = cfg.inference.t_start
                 ab_s = self.diffusion.alpha_bar[t_s].to(self.device)
-                noise = torch.randn_like(cond)
+                # Seed noise per centre frame for temporal consistency (no flicker)
+                noise_parts = []
+                for i, centre in enumerate(centres):
+                    gen = torch.Generator(device=self.device).manual_seed(centre)
+                    noise_parts.append(torch.randn(T, 3, H, W, device=self.device, generator=gen))
+                noise = torch.stack(noise_parts, dim=0).view(B * T, 3, H, W)
                 x = ab_s.sqrt() * cond + (1.0 - ab_s).sqrt() * noise
 
                 x_out = self._denoise_full(x, cond)          # (B*T, 3, H, W)
@@ -173,7 +178,7 @@ class Restorer:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     @torch.no_grad()
-    def _restore_window(self, window: torch.Tensor, centre_idx: int) -> torch.Tensor:
+    def _restore_window(self, window: torch.Tensor, centre_idx: int, frame_idx: int = 0) -> torch.Tensor:
         """
         Denoise a T-frame window and return the centre frame.
 
@@ -192,7 +197,8 @@ class Restorer:
         # We add noise to ALL frames at t_start to initialise the reverse pass.
         t_start  = cfg.inference.t_start
         ab_s     = self.diffusion.alpha_bar[t_start].to(self.device)
-        noise    = torch.randn(T, 3, H, W, device=self.device)
+        gen      = torch.Generator(device=self.device).manual_seed(frame_idx)
+        noise    = torch.randn(T, 3, H, W, device=self.device, generator=gen)
         x        = ab_s.sqrt() * window + (1.0 - ab_s).sqrt() * noise  # (T, 3, H, W)
 
         tile_sz  = cfg.inference.tile_size
