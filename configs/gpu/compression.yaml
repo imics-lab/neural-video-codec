@@ -5,15 +5,16 @@ detection:
   half: true
   processing_scale: 1.00       # run detector at full input resolution (important at low res)
   imgsz: 640
-  conf: 0.25
+  conf: 0.10
   iou_nms: 0.50
   bbox_pad_frac: 0.10          # expand each bbox by this fraction of its own size
   bbox_pad_px: 8               # additional fixed-pixel padding
   keyframe_interval: 15        # run full YOLO every N frames; track between keyframes
   tracking:
     enabled: true
-    min_hits: 2                # confirmations before a track is emitted
-    max_det_gap: 90            # frames a track can survive without a detection
+    min_hits: 1                # confirmations before a track is emitted
+    max_det_gap: 180           # frames a track can survive without a detection
+    mask_hold_frames: 15       # keep last known bbox for N frames after detection loss
     match_iou: 0.30            # IoU threshold for detection→track assignment
     vel_smooth: 0.70           # EMA coefficient for velocity smoothing
 

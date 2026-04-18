@@ -76,6 +76,7 @@ def _expand_box(
 class _Track:
     track_id: int
     bbox: Tuple[float, float, float, float]  # processing-space xyxy
+    last_confirmed_bbox: Tuple[float, float, float, float] = None  # bbox at last confirmed detection
     conf: float
     cls: int
     label: str
@@ -284,8 +285,9 @@ def run_detection(
     min_hits   = int(tr.get("min_hits", 2))
     max_gap    = int(tr.get("max_det_gap", 90))
     vel_smooth = float(tr.get("vel_smooth", 0.70))
-    klt_max    = int(tr.get("klt_max_points", 80))
-    klt_min    = int(tr.get("klt_min_points", 10))
+    klt_max      = int(tr.get("klt_max_points", 80))
+    klt_min      = int(tr.get("klt_min_points", 10))
+    mask_hold    = int(tr.get("mask_hold_frames", 0))
 
     use_md = (variant == "megadetector")
     if use_md:
@@ -374,6 +376,7 @@ def run_detection(
                         t.bbox = nb
                         t.conf = det_confs[di]
                         t.last_det_frame = frame_idx
+                        t.last_confirmed_bbox = nb
                         t.hits += 1
                         if t.hits >= min_hits:
                             t.confirmed = True
@@ -424,11 +427,19 @@ def run_detection(
                 tracks = alive
 
             # Emit confirmed tracks for this frame
+            # Also emit recently-lost tracks using last known bbox (temporal hold)
             rois = []
             for t in tracks:
                 if not t.confirmed:
                     continue
-                bx1, by1, bx2, by2 = t.bbox
+                frames_since_det = frame_idx - t.last_det_frame
+                if frames_since_det > mask_hold and t.last_confirmed_bbox is not None:
+                    # Detection was lost — use last confirmed bbox during hold window
+                    bx1, by1, bx2, by2 = t.last_confirmed_bbox
+                elif frames_since_det > mask_hold:
+                    continue
+                else:
+                    bx1, by1, bx2, by2 = t.bbox
                 # Scale back to full resolution
                 fx1 = int(round(bx1 * sx)); fy1 = int(round(by1 * sy))
                 fx2 = int(round(bx2 * sx)); fy2 = int(round(by2 * sy))
