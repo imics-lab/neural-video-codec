@@ -76,7 +76,7 @@ class Restorer:
             n_heads          = mcfg.get("n_heads", config.model.n_heads),
         )
         self.model.load_state_dict(state)
-        self.model.to(self.device).half().eval()
+        self.model.to(self.device).eval()  # fp32 weights, autocast handles fp16 compute
 
         T_diff = getattr(config.model, "timesteps", 1000)
         self.diffusion = GaussianDiffusion(T=T_diff)
@@ -98,9 +98,8 @@ class Restorer:
         half = T // 2
         cfg  = self.cfg
 
-        # Convert all frames to [0,1] tensors (fp16)
-        deg_01 = [_to_tensor(f).to(self.device, dtype=torch.float16)
-                  for f in degraded_frames]
+        # Convert all frames to [0,1] fp32 tensors (matching _save_samples precision)
+        deg_01 = [_to_tensor(f).to(self.device) for f in degraded_frames]
 
         _, H, W = deg_01[0].shape
         batch_size = int(getattr(cfg.inference, 'batch_size', 1))
@@ -138,8 +137,7 @@ class Restorer:
             x_parts = []
             for i, c in enumerate(centres):
                 gen = torch.Generator(device=self.device).manual_seed(c)
-                noise = torch.randn(3, H, W, device=self.device,
-                                    dtype=torch.float16, generator=gen)
+                noise = torch.randn(3, H, W, device=self.device, generator=gen)
                 x_c = windows_norm[i][half]   # (3,H,W) centre frame in [-1,1]
                 x_parts.append(ab_s.sqrt() * x_c + (1.0 - ab_s).sqrt() * noise)
             x = torch.stack(x_parts, dim=0)   # (B, 3, H, W)
@@ -163,7 +161,7 @@ class Restorer:
 
                 with torch.amp.autocast("cuda"):
                     eps_all = self.model(model_in, t_b)        # (B*T, 3, H, W)
-                eps_all = eps_all.to(x.dtype)
+                eps_all = eps_all.float()
 
                 # Take only centre-frame prediction from each window
                 eps_all = eps_all.view(B, T, 3, H, W)
