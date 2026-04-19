@@ -291,7 +291,7 @@ def _save_samples(
             x0_pred  = x0_pred.clamp(-1, 2)
             x        = ab_p.sqrt() * x0_pred + (1 - ab_p).sqrt() * eps_c
 
-        restored = x.squeeze(0).clamp(0, 1)                 # (3, H, W)
+        restored = ((x.squeeze(0) + 1.0) * 0.5).clamp(0, 1)  # [-1,1] → [0,1]
 
         def _to_np(t):
             return (t.permute(1, 2, 0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
