@@ -1,13 +1,12 @@
 """
 Restorer — inference wrapper around RestoreUNet + GaussianDiffusion (Model R).
 
-Inference protocol (must mirror training exactly):
-  - Only the CENTRE frame of each window is noised (x_t).
-  - The model receives T copies of [x_t, cond_frame_i] for i in 0..T-1
-    (same noised x, different conditioning per temporal position).
-  - Only the centre frame's noise prediction (eps[T//2]) updates x_t.
-  - Inputs/outputs are in [-1,1] space (matching training normalisation
-    x0 = orig * 2 - 1).
+Inference protocol mirrors training exactly:
+  - Only the CENTRE frame of each T-window is noised (x_t).
+  - Model receives T copies of [x_t, cond_frame_i] for i in 0..T-1.
+  - Only the centre frame noise prediction (eps[T//2]) is used to update x_t.
+  - Inputs/outputs in [-1,1] space (training: x0 = orig * 2 - 1).
+  - Optional tiling at training patch size (256×256) via Gaussian blending.
 """
 from __future__ import annotations
 
@@ -22,8 +21,6 @@ from ._network import RestoreUNet
 from ._diffusion import GaussianDiffusion
 
 
-# ── Frame ↔ tensor helpers ────────────────────────────────────────────────────
-
 def _to_tensor(frame_bgr: np.ndarray) -> torch.Tensor:
     """BGR uint8 (H,W,3) → RGB float32 (3,H,W) in [0,1]."""
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -37,14 +34,15 @@ def _to_frame(t: torch.Tensor) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
-# ── Restorer ──────────────────────────────────────────────────────────────────
+def _gaussian_weight(h: int, w: int) -> torch.Tensor:
+    def _g(n):
+        c = torch.arange(n, dtype=torch.float32) - n / 2.0
+        g = torch.exp(-(c ** 2) / (2 * (n / 6.0) ** 2))
+        return (g / g.max()).clamp(min=1e-6)
+    return _g(h).unsqueeze(1) * _g(w).unsqueeze(0)
+
 
 class Restorer:
-    """
-    Wraps RestoreUNet for inference on a sequence of degraded frames.
-
-    Sliding window of size T (stride 1). Boundary frames padded by replication.
-    """
 
     def __init__(self, config) -> None:
         self.cfg    = config
@@ -57,12 +55,12 @@ class Restorer:
 
         ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         if isinstance(ckpt, dict) and "model" in ckpt:
-            state = ckpt["model"]
-            mcfg  = ckpt.get("model_cfg", {})
+            state  = ckpt["model"]
+            mcfg   = ckpt.get("model_cfg", {})
             T_ckpt = mcfg.get("temporal_window", self.T)
         else:
-            state = ckpt
-            mcfg  = {}
+            state  = ckpt
+            mcfg   = {}
             T_ckpt = self.T
 
         if any(k.startswith("module.") for k in state):
@@ -76,7 +74,7 @@ class Restorer:
             n_heads          = mcfg.get("n_heads", config.model.n_heads),
         )
         self.model.load_state_dict(state)
-        self.model.to(self.device).eval()  # fp32 weights, autocast handles fp16 compute
+        self.model.to(self.device).eval()  # fp32 weights; autocast handles fp16 compute
 
         T_diff = getattr(config.model, "timesteps", 1000)
         self.diffusion = GaussianDiffusion(T=T_diff)
@@ -85,11 +83,6 @@ class Restorer:
 
     @torch.no_grad()
     def restore_sequence(self, degraded_frames: List[np.ndarray]) -> List[np.ndarray]:
-        """
-        Restore a list of degraded BGR frames.
-
-        Returns a list of restored BGR uint8 arrays (same length and size).
-        """
         N = len(degraded_frames)
         if N == 0:
             return []
@@ -98,18 +91,18 @@ class Restorer:
         half = T // 2
         cfg  = self.cfg
 
-        # Convert all frames to [0,1] fp32 tensors (matching _save_samples precision)
         deg_01 = [_to_tensor(f).to(self.device) for f in degraded_frames]
 
-        _, H, W = deg_01[0].shape
+        _, H, W    = deg_01[0].shape
         batch_size = int(getattr(cfg.inference, 'batch_size', 1))
         t_start    = cfg.inference.t_start
         ddim_steps = cfg.inference.ddim_steps
-        color_fix  = cfg.inference.color_fix
+        tile_sz    = int(cfg.inference.tile_size)
+        tile_ov    = int(cfg.inference.tile_overlap)
 
-        ab        = self.diffusion.alpha_bar.to(self.device)
-        ab_s      = ab[t_start]
-        step_idx  = torch.linspace(t_start, 0, ddim_steps + 1).long()
+        ab       = self.diffusion.alpha_bar.to(self.device)
+        ab_s     = ab[t_start]
+        step_idx = torch.linspace(t_start, 0, ddim_steps + 1).long()
 
         restored: List[Optional[torch.Tensor]] = [None] * N
 
@@ -121,68 +114,37 @@ class Restorer:
             centres = list(range(batch_start, min(batch_start + batch_size, N)))
             B = len(centres)
 
-            # ── Build T-frame windows in [-1,1] and [0,1] ─────────────────────
-            # windows_norm: (B, T, 3, H, W) in [-1,1] — conditioning for model
-            # centre_01:    (B, 3, H, W) in [0,1]     — for color-fix
-            windows_norm = []
-            centre_01    = []
+            # Build T-frame windows in [-1,1]
+            windows_norm = []   # (B, T, 3, H, W) in [-1,1]
             for c in centres:
                 idxs = [max(0, min(N - 1, c + k - half)) for k in range(T)]
                 w    = torch.stack([deg_01[i] for i in idxs], dim=0)  # (T,3,H,W)
                 windows_norm.append(w * 2.0 - 1.0)
-                centre_01.append(deg_01[c])
 
-            # ── Noise ONLY the centre frame (matching training) ────────────────
-            # x shape: (B, 3, H, W) — one noised frame per window
-            x_parts = []
-            for i, c in enumerate(centres):
-                gen = torch.Generator(device=self.device).manual_seed(c)
-                noise = torch.randn(3, H, W, device=self.device, generator=gen)
-                x_c = windows_norm[i][half]   # (3,H,W) centre frame in [-1,1]
-                x_parts.append(ab_s.sqrt() * x_c + (1.0 - ab_s).sqrt() * noise)
-            x = torch.stack(x_parts, dim=0)   # (B, 3, H, W)
+            if tile_sz > 0 and (H > tile_sz or W > tile_sz):
+                # ── Tiled path: process 256×256 patches matching training ────
+                # Run each window independently (B=1 per tile for simplicity)
+                for i, c in enumerate(centres):
+                    restored[c] = self._restore_tiled(
+                        windows_norm[i],   # (T, 3, H, W)
+                        c, ab_s, ab, step_idx, ddim_steps, tile_sz, tile_ov,
+                    )
+            else:
+                # ── Full-frame path ───────────────────────────────────────────
+                # Noise only the centre frame of each window
+                x_parts = []
+                for i, c in enumerate(centres):
+                    gen = torch.Generator(device=self.device).manual_seed(c)
+                    noise = torch.randn(3, H, W, device=self.device, generator=gen)
+                    x_c   = windows_norm[i][half]
+                    x_parts.append(ab_s.sqrt() * x_c + (1.0 - ab_s).sqrt() * noise)
+                x = torch.stack(x_parts, dim=0)   # (B, 3, H, W)
 
-            # ── DDIM loop ──────────────────────────────────────────────────────
-            # model input: (B*T, 6, H, W) ordered [w0t0, w0t1, w0t2, w1t0, ...]
-            # Each row: [x_centre_i replicated, cond_frame_ti]  ← same as training
-            for si in range(ddim_steps):
-                t_cur  = int(step_idx[si].item())
-                t_next = int(step_idx[si + 1].item())
+                x = self._ddim_loop(x, windows_norm, B, T, half, ab, step_idx, ddim_steps)
 
-                # Build (B*T, 6, H, W)
-                rows = []
-                for i in range(B):
-                    for ti in range(T):
-                        rows.append(torch.cat([x[i].unsqueeze(0),
-                                               windows_norm[i][ti].unsqueeze(0)], dim=1))
-                model_in = torch.cat(rows, dim=0)              # (B*T, 6, H, W)
-                t_b = torch.full((B * T,), t_cur,
-                                 device=self.device, dtype=torch.long)
-
-                with torch.amp.autocast("cuda"):
-                    eps_all = self.model(model_in, t_b)        # (B*T, 3, H, W)
-                eps_all = eps_all.float()
-
-                # Take only centre-frame prediction from each window
-                eps_all = eps_all.view(B, T, 3, H, W)
-                eps_c   = eps_all[:, half]                     # (B, 3, H, W)
-
-                ab_t    = ab[t_cur]
-                ab_prev = ab[t_next]
-                x0_pred = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
-                x0_pred = x0_pred.clamp(-1.0, 2.0)
-                x       = ab_prev.sqrt() * x0_pred + (1 - ab_prev).sqrt() * eps_c
-
-            # ── Convert [-1,1] → [0,1] and optional color-fix ─────────────────
-            x_out = ((x + 1.0) * 0.5).clamp(0.0, 1.0)        # (B, 3, H, W)
-
-            for i, c in enumerate(centres):
-                out = x_out[i]
-                if color_fix:
-                    dm  = centre_01[i].mean(dim=[1, 2], keepdim=True)
-                    om  = out.mean(dim=[1, 2], keepdim=True)
-                    out = (out - om + dm).clamp(0.0, 1.0)
-                restored[c] = out
+                x_out = ((x + 1.0) * 0.5).clamp(0.0, 1.0)
+                for i, c in enumerate(centres):
+                    restored[c] = x_out[i]
 
             processed += B
             elapsed = _time.perf_counter() - t0
@@ -192,3 +154,98 @@ class Restorer:
                   flush=True)
 
         return [_to_frame(t) for t in restored if t is not None]
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _ddim_loop(
+        self,
+        x:            torch.Tensor,   # (B, 3, H, W) noised centre frame in [-1,1]
+        windows_norm: list,           # list of B tensors (T, 3, h, w) in [-1,1]
+        B: int, T: int, half: int,
+        ab:       torch.Tensor,
+        step_idx: torch.Tensor,
+        ddim_steps: int,
+    ) -> torch.Tensor:
+        """Run DDIM; return denoised x in [-1,1]."""
+        _, _, H, W = x.shape
+        for si in range(ddim_steps):
+            t_cur  = int(step_idx[si].item())
+            t_next = int(step_idx[si + 1].item())
+
+            # Build (B*T, 6, H, W): T copies of x[i] with different cond frames
+            rows = []
+            for i in range(B):
+                for ti in range(T):
+                    rows.append(torch.cat(
+                        [x[i:i+1], windows_norm[i][ti:ti+1]], dim=1))
+            model_in = torch.cat(rows, dim=0)
+            t_b = torch.full((B * T,), t_cur, device=self.device, dtype=torch.long)
+
+            with torch.amp.autocast("cuda"):
+                eps_all = self.model(model_in, t_b)
+            eps_all = eps_all.float().view(B, T, 3, H, W)
+            eps_c   = eps_all[:, half]              # (B, 3, H, W)
+
+            ab_t    = ab[t_cur]
+            ab_prev = ab[t_next]
+            x0_pred = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
+            x0_pred = x0_pred.clamp(-1.0, 2.0)
+            x       = ab_prev.sqrt() * x0_pred + (1 - ab_prev).sqrt() * eps_c
+        return x
+
+    @torch.no_grad()
+    def _restore_tiled(
+        self,
+        window_norm: torch.Tensor,   # (T, 3, H, W) in [-1,1]
+        frame_seed:  int,
+        ab_s:        torch.Tensor,
+        ab:          torch.Tensor,
+        step_idx:    torch.Tensor,
+        ddim_steps:  int,
+        tile_sz:     int,
+        overlap:     int,
+    ) -> torch.Tensor:
+        """
+        Restore a single window by splitting into tile_sz×tile_sz tiles,
+        running DDIM on each, and blending with Gaussian weights.
+        Returns (3, H, W) in [0,1].
+        """
+        T, _, H, W = window_norm.shape
+        half  = T // 2
+        step  = max(tile_sz - overlap, 1)
+
+        output = torch.zeros(3, H, W, device=self.device)
+        weight = torch.zeros(1, H, W, device=self.device)
+
+        tile_idx = 0
+        for y0 in range(0, H, step):
+            for x0 in range(0, W, step):
+                y1 = min(y0 + tile_sz, H); ya = max(0, y1 - tile_sz)
+                x1 = min(x0 + tile_sz, W); xa = max(0, x1 - tile_sz)
+
+                cond_tile  = window_norm[:, :, ya:y1, xa:x1]  # (T,3,th,tw)
+                _, _, th, tw = cond_tile.shape
+                centre_tile = cond_tile[half]                  # (3,th,tw) in [-1,1]
+
+                # Seed noise from frame + tile index for temporal consistency
+                gen = torch.Generator(device=self.device).manual_seed(
+                    frame_seed * 10000 + tile_idx)
+                noise = torch.randn(3, th, tw, device=self.device, generator=gen)
+                x_tile = (ab_s.sqrt() * centre_tile
+                          + (1.0 - ab_s).sqrt() * noise).unsqueeze(0)  # (1,3,th,tw)
+
+                # DDIM: B=1 window
+                x_tile = self._ddim_loop(
+                    x_tile,
+                    [cond_tile],          # list of 1 tensor (T,3,th,tw)
+                    B=1, T=T, half=half,
+                    ab=ab, step_idx=step_idx, ddim_steps=ddim_steps,
+                )
+                tile_out = ((x_tile[0] + 1.0) * 0.5).clamp(0.0, 1.0)  # (3,th,tw)
+
+                blend = _gaussian_weight(th, tw).to(self.device)        # (th,tw)
+                output[:, ya:y1, xa:x1] += tile_out * blend
+                weight[:, ya:y1, xa:x1] += blend
+                tile_idx += 1
+
+        return (output / weight.clamp(min=1e-6)).clamp(0.0, 1.0)
