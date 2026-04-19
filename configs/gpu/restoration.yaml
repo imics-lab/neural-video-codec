@@ -11,12 +11,12 @@ model:
 
 inference:
   ddim_steps: 20               # denoising steps (1 = fast, 50 = quality)
-  t_start: 200                 # img2img start timestep; lower = more faithful to input
+  t_start: 100                 # img2img start timestep; lower = more faithful to input
   tile_size: 0                 # 0 = no tiling; process full frame at once
   tile_overlap: 64             # overlap between tiles for Gaussian blending
   color_fix: true              # shift tile means to match LR color structure
   batch_size: 2                # window batches processed at once
-  roi_restore_strength: 0.3    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
+  roi_restore_strength: 0.0    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
 
 output:
   out_dir: "outputs/restoration"
