@@ -76,7 +76,6 @@ def _expand_box(
 class _Track:
     track_id: int
     bbox: Tuple[float, float, float, float]  # processing-space xyxy
-    last_confirmed_bbox: Tuple[float, float, float, float] = None  # bbox at last confirmed detection
     conf: float
     cls: int
     label: str
@@ -85,6 +84,7 @@ class _Track:
     confirmed: bool = False
     vx: float = 0.0
     vy: float = 0.0
+    last_confirmed_bbox: Tuple[float, float, float, float] = None  # bbox at last confirmed detection
 
 
 def _match_greedy(
