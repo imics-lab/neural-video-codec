@@ -10,8 +10,8 @@ model:
   n_heads: 4                   # temporal attention heads
 
 inference:
-  ddim_steps: 10               # denoising steps (1 = fast, 50 = quality)
-  t_start: 50                  # img2img start timestep; lower = more faithful to input
+  ddim_steps: 20               # denoising steps (1 = fast, 50 = quality)
+  t_start: 200                 # img2img start timestep; lower = more faithful to input
   tile_size: 0                 # 0 = no tiling; process full frame at once
   tile_overlap: 64             # overlap between tiles for Gaussian blending
   color_fix: true              # shift tile means to match LR color structure
