@@ -121,8 +121,6 @@ def process_video(
     video_path: Path,
     output_dir: Path,
     cfg: Dict[str, Any],
-    patch_size: int = 256,
-    patches_per_frame: int = 4,
     resolution: Optional[tuple] = None,
     max_frames: Optional[int] = None,
 ) -> int:
@@ -169,24 +167,13 @@ def process_video(
         if orig.shape != deg.shape:
             deg = cv2.resize(deg, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_AREA)
 
-        # Extract random patches to increase effective dataset size
-        H, W = orig.shape[:2]
-        if H >= patch_size and W >= patch_size:
-            for _ in range(patches_per_frame):
-                y0 = np.random.randint(0, H - patch_size + 1)
-                x0 = np.random.randint(0, W - patch_size + 1)
-                orig_patch = orig[y0:y0 + patch_size, x0:x0 + patch_size]
-                deg_patch  = deg[y0:y0 + patch_size, x0:x0 + patch_size]
-                name = f"{fi:06d}_{y0}_{x0}.png"
-                cv2.imwrite(str(orig_dir / name), orig_patch)
-                cv2.imwrite(str(deg_dir  / name), deg_patch)
-                pairs_written += 1
-        else:
-            # Frame smaller than patch — save full frame
-            name = f"{fi:06d}.png"
-            cv2.imwrite(str(orig_dir / name), orig)
-            cv2.imwrite(str(deg_dir  / name), deg)
-            pairs_written += 1
+        # Save full frames — the Dataset applies the same random spatial crop to all
+        # T temporal frames at load time, giving a proper temporal window at the
+        # same spatial location. Saving patches here would break temporal coherence.
+        name = f"{fi:06d}.png"
+        cv2.imwrite(str(orig_dir / name), orig)
+        cv2.imwrite(str(deg_dir  / name), deg)
+        pairs_written += 1
 
     elapsed = time.perf_counter() - t0
     LOGGER.info(f"  {stem}: {pairs_written} pairs in {elapsed:.1f}s")
@@ -198,8 +185,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--videos",     required=True, help="Folder of source videos")
     p.add_argument("--output",     required=True, help="Output pairs folder")
     p.add_argument("--config",     default="configs/gpu/compression.yaml")
-    p.add_argument("--patch-size", type=int, default=256)
-    p.add_argument("--patches-per-frame", type=int, default=4)
     p.add_argument("--resolution", default="480x360",
                    help="Resize frames to WxH before compression (match inference resolution)")
     p.add_argument("--max-frames-per-video", type=int, default=150,
@@ -241,8 +226,6 @@ def main() -> int:
         print(f"[{i}/{len(videos)}] {vp.name}")
         try:
             n = process_video(vp, output_dir, cfg,
-                              patch_size=args.patch_size,
-                              patches_per_frame=args.patches_per_frame,
                               resolution=resolution,
                               max_frames=args.max_frames_per_video)
             total_pairs += n
