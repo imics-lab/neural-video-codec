@@ -109,6 +109,7 @@ def main():
     p.add_argument("--data",    required=True)
     p.add_argument("--config",  default="configs/gpu/restoration.yaml")
     p.add_argument("--out",     default="debug_compare.png")
+    p.add_argument("--video",   default=None, help="Video subfolder name (e.g. bird1)")
     p.add_argument("--sample",  type=int, default=0, help="Dataset sample index")
     p.add_argument("--device",  default="cuda")
     args = p.parse_args()
@@ -157,7 +158,13 @@ def main():
     if not video_dirs:
         print("No videos found in dataset"); return
 
-    vid_dir  = video_dirs[0]
+    if args.video:
+        vid_dir = orig_root / args.video
+        if not vid_dir.exists():
+            print(f"Video '{args.video}' not found. Available: {[d.name for d in video_dirs]}")
+            return
+    else:
+        vid_dir = video_dirs[0]
     deg_dir  = deg_root / vid_dir.name
     names    = sorted(p.name for p in vid_dir.glob("*.png"))
     centre_i = half + args.sample * 5  # pick a frame
@@ -185,6 +192,14 @@ def main():
     diff_t = (out_ss - out_res).abs()
     print(f"Max pixel diff (ss vs restorer): {diff_t.max().item():.6f}")
     print(f"Mean pixel diff:                 {diff_t.mean().item():.6f}")
+
+    # How much did the model actually change the input?
+    deg_t  = deg_frames[half].float()
+    change_ss  = (out_ss  - deg_t).abs()
+    change_res = (out_res - deg_t).abs()
+    print(f"\nChange from degraded input:")
+    print(f"  _save_samples path — mean={change_ss.mean().item():.6f}  max={change_ss.max().item():.6f}")
+    print(f"  restorer path     — mean={change_res.mean().item():.6f}  max={change_res.max().item():.6f}")
 
     deg_np  = _to_np(deg_frames[half])
     ss_np   = _to_np(out_ss)
