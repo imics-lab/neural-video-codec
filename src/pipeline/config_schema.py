@@ -40,6 +40,19 @@ def _must_exist(path_value: str, field_name: str, root_dir: Path, errors: list[s
         errors.append(f"{field_name} does not exist: {path}")
 
 
+def _optional_path_string(v: Any, name: str, errors: list[str]) -> Optional[str]:
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        errors.append(f"{name} must be a string path")
+        return None
+    value = v.strip()
+    if not value:
+        errors.append(f"{name} must be a non-empty string when provided")
+        return None
+    return value
+
+
 def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = None, root_dir: Optional[Path] = None) -> None:
     """
     Validate runtime-critical config fields. Raises ValueError on any issue.
@@ -70,15 +83,29 @@ def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = No
     tracking_cfg = _as_dict(roi_cfg.get("tracking", {}), "roi_detection.tracking", errors)
 
     roi_enabled = bool(roi_cfg.get("enable", True))
-    model_path = paths_cfg.get("animal_model_path")
-    onnx_model_path = paths_cfg.get("animal_model_path_onnx")
-    if roi_enabled:
-        if not model_path:
-            errors.append("roi_detection.paths.animal_model_path is required when roi_detection.enable=true")
+    model_path = _optional_path_string(paths_cfg.get("animal_model_path"), "roi_detection.paths.animal_model_path", errors)
+    onnx_model_path = _optional_path_string(
+        paths_cfg.get("animal_model_path_onnx"),
+        "roi_detection.paths.animal_model_path_onnx",
+        errors,
+    )
+    model_exists = bool(model_path and _resolve_path(model_path, root).exists())
+    onnx_model_exists = bool(onnx_model_path and _resolve_path(onnx_model_path, root).exists())
+    if roi_enabled and not model_exists and not onnx_model_exists:
+        details = []
+        if model_path is None:
+            details.append("roi_detection.paths.animal_model_path is not configured")
         else:
-            _must_exist(str(model_path), "roi_detection.paths.animal_model_path", root, errors)
-    if onnx_model_path:
-        _must_exist(str(onnx_model_path), "roi_detection.paths.animal_model_path_onnx", root, errors)
+            details.append(f"roi_detection.paths.animal_model_path not found: {_resolve_path(model_path, root)}")
+        if onnx_model_path is None:
+            details.append("roi_detection.paths.animal_model_path_onnx is not configured")
+        else:
+            details.append(f"roi_detection.paths.animal_model_path_onnx not found: {_resolve_path(onnx_model_path, root)}")
+        errors.append(
+            "roi_detection.enable=true requires at least one existing detector model under "
+            "roi_detection.paths.animal_model_path or roi_detection.paths.animal_model_path_onnx. "
+            + "; ".join(details)
+        )
 
     if "processing_scale" in runtime_cfg:
         _ensure_number_range(runtime_cfg["processing_scale"], "roi_detection.runtime.processing_scale", errors, 0.1, 1.0)
@@ -124,15 +151,6 @@ def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = No
         _ensure_type(runtime_cfg["prefer_onnx"], bool, "roi_detection.runtime.prefer_onnx", errors)
     if "prefer_onnx_strict" in runtime_cfg:
         _ensure_type(runtime_cfg["prefer_onnx_strict"], bool, "roi_detection.runtime.prefer_onnx_strict", errors)
-    if bool(runtime_cfg.get("prefer_onnx_strict", False)) and not bool(runtime_cfg.get("prefer_onnx", False)):
-        errors.append("roi_detection.runtime.prefer_onnx_strict=true requires roi_detection.runtime.prefer_onnx=true")
-    if bool(runtime_cfg.get("prefer_onnx", False)):
-        if not onnx_model_path:
-            errors.append(
-                "roi_detection.runtime.prefer_onnx=true requires roi_detection.paths.animal_model_path_onnx"
-            )
-        elif roi_enabled:
-            _must_exist(str(onnx_model_path), "roi_detection.paths.animal_model_path_onnx", root, errors)
 
     if "match_iou" in tracking_cfg:
         _ensure_number_range(tracking_cfg["match_iou"], "roi_detection.tracking.match_iou", errors, 0.0, 1.0)
@@ -247,51 +265,39 @@ def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = No
             )
 
     # compression
-    dcvc_cfg = _as_dict(comp_cfg.get("dcvc", {}), "compression.dcvc", errors)
+    codec_cfg = _as_dict(comp_cfg.get("codec", {}), "compression.codec", errors)
     quality_cfg = _as_dict(comp_cfg.get("quality", {}), "compression.quality", errors)
     roi_comp_cfg = _as_dict(comp_cfg.get("roi", {}), "compression.roi", errors)
-
-    for key in ("model_i", "model_p", "repo_dir"):
-        if not dcvc_cfg.get(key):
-            errors.append(f"compression.dcvc.{key} is required")
-    if dcvc_cfg.get("model_i"):
-        _must_exist(str(dcvc_cfg["model_i"]), "compression.dcvc.model_i", root, errors)
-    if dcvc_cfg.get("model_p"):
-        _must_exist(str(dcvc_cfg["model_p"]), "compression.dcvc.model_p", root, errors)
-    if dcvc_cfg.get("repo_dir"):
-        _must_exist(str(dcvc_cfg["repo_dir"]), "compression.dcvc.repo_dir", root, errors)
-    if "reset_interval" in dcvc_cfg:
-        _ensure_number_range(dcvc_cfg["reset_interval"], "compression.dcvc.reset_interval", errors, 1, None)
-    if "device" in dcvc_cfg:
-        dev = dcvc_cfg.get("device")
-        if isinstance(dev, bool):
-            errors.append(
-                "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
-            )
-        elif isinstance(dev, int):
-            if int(dev) < 0:
-                errors.append("compression.dcvc.device integer index must be >= 0")
-        elif isinstance(dev, str):
-            s = dev.strip().lower()
-            if s in {"cpu", "mps"}:
-                errors.append("Strict GPU runtime forbids compression.dcvc.device set to CPU/MPS")
-            valid = (
-                s in {"auto", "cuda"}
-                or s.isdigit()
-                or (s.startswith("cuda:") and s.split(":", 1)[1].strip().isdigit())
-            )
-            if not valid:
-                errors.append(
-                    "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
-                )
-        else:
-            errors.append(
-                "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
-            )
-    if "use_cuda" in dcvc_cfg:
-        _ensure_type(dcvc_cfg["use_cuda"], bool, "compression.dcvc.use_cuda", errors)
-        if isinstance(dcvc_cfg.get("use_cuda"), bool) and not bool(dcvc_cfg.get("use_cuda")):
-            errors.append("Strict GPU runtime forbids compression.dcvc.use_cuda=false")
+    if not codec_cfg:
+        errors.append("compression.codec is required")
+    else:
+        if "ffmpeg_bin" in codec_cfg:
+            _ensure_type(codec_cfg["ffmpeg_bin"], str, "compression.codec.ffmpeg_bin", errors)
+        if "ffprobe_bin" in codec_cfg:
+            _ensure_type(codec_cfg["ffprobe_bin"], str, "compression.codec.ffprobe_bin", errors)
+        for stream_name in ("roi", "bg"):
+            stream_cfg = _as_dict(codec_cfg.get(stream_name, {}), f"compression.codec.{stream_name}", errors)
+            if not stream_cfg:
+                errors.append(f"compression.codec.{stream_name} is required")
+                continue
+            for key in ("codec", "encoder", "container"):
+                value = stream_cfg.get(key, None)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"compression.codec.{stream_name}.{key} is required")
+            qp_value = stream_cfg.get("qp", None)
+            if qp_value is None:
+                errors.append(f"compression.codec.{stream_name}.qp is required")
+            else:
+                _ensure_number_range(qp_value, f"compression.codec.{stream_name}.qp", errors, 0, 63)
+            if "pix_fmt" in stream_cfg:
+                _ensure_type(stream_cfg["pix_fmt"], str, f"compression.codec.{stream_name}.pix_fmt", errors)
+            if "preset" in stream_cfg and stream_cfg.get("preset", None) is not None:
+                if not isinstance(stream_cfg["preset"], (str, int)):
+                    errors.append(f"compression.codec.{stream_name}.preset must be a string or integer")
+            if "encoder_candidates" in stream_cfg and not isinstance(stream_cfg.get("encoder_candidates"), list):
+                errors.append(f"compression.codec.{stream_name}.encoder_candidates must be a list when provided")
+        if "low_memory" in comp_cfg:
+            _ensure_type(comp_cfg["low_memory"], bool, "compression.low_memory", errors)
 
     for key in ("roi_qp_i", "roi_qp_p", "bg_qp_i", "bg_qp_p"):
         if key in quality_cfg:

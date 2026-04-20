@@ -9,14 +9,8 @@ decompression:
   roi_temporal_mask_dilate: 1
   roi_temporal_overlap_only: true
 
-  # Local DCVC paths (used to override archive metadata paths when needed).
-  dcvc:
-    repo_dir: "DCVC"
-    model_i: "models/cvpr2025_image.pth.tar"
-    model_p: "models/cvpr2025_video.pth.tar"
-    use_cuda: true
-    cuda_idx: 0
-    force_zero_thres: null
+  archive_codec:
+    ffmpeg_bin: "ffmpeg"
 
   interpolate:
     enable: true

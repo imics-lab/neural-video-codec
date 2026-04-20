@@ -12,8 +12,20 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.compression.phase4_dcvc import compress_keep_streams_dcvc  # noqa: E402
-from src.compression.dcvc_encoder import VideoInfo  # noqa: E402
+from src.compression.phase4_codec import compress_keep_streams  # noqa: E402
+from src.compression.ffmpeg_codec import VideoInfo  # noqa: E402
+
+
+def _compression_cfg() -> dict:
+    return {
+        "codec": {
+            "ffmpeg_bin": "ffmpeg",
+            "ffprobe_bin": "ffprobe",
+            "roi": {"codec": "av1", "encoder": "libsvtav1", "container": "mkv", "preset": 0, "qp": 10},
+            "bg": {"codec": "hevc", "encoder": "libx265", "container": "mkv", "preset": "medium", "qp": 35},
+        },
+        "quality": {"roi_qp_i": 10, "roi_qp_p": 10, "bg_qp_i": 35, "bg_qp_p": 35},
+    }
 
 
 class TestPhase4Metadata(unittest.TestCase):
@@ -21,22 +33,29 @@ class TestPhase4Metadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             video_path = tmp / "video.mp4"
-            model_i = tmp / "i.pth.tar"
-            model_p = tmp / "p.pth.tar"
-            repo_dir = tmp / "DCVC"
-
             video_path.write_bytes(b"video")
-            model_i.write_bytes(b"i")
-            model_p.write_bytes(b"p")
-            repo_dir.mkdir(parents=True, exist_ok=True)
 
             fake_roi = {
                 "bitstream_bytes": b"roi",
-                "meta": {"frames_encoded": 2, "frame_index_map": [2, 6], "device": "cuda"},
+                "meta": {
+                    "frames_encoded": 2,
+                    "frame_index_map": [2, 6],
+                    "codec": "av1",
+                    "encoder": "libsvtav1",
+                    "container": "mkv",
+                    "qp": 10,
+                },
             }
             fake_bg = {
                 "bitstream_bytes": b"bg",
-                "meta": {"frames_encoded": 1, "frame_index_map": [4], "device": "cuda"},
+                "meta": {
+                    "frames_encoded": 1,
+                    "frame_index_map": [4],
+                    "codec": "hevc",
+                    "encoder": "libx265",
+                    "container": "mkv",
+                    "qp": 35,
+                },
             }
             fake_cache = {
                 "roi_store": None,
@@ -47,26 +66,20 @@ class TestPhase4Metadata(unittest.TestCase):
                 "bg_count": 1,
             }
 
-            with patch("src.compression.phase4_dcvc.probe_video", return_value=VideoInfo(32, 24, 30.0, 10)):
-                with patch("src.compression.phase4_dcvc._capture_rendered_kept_frames_single_pass", return_value=fake_cache):
+            cfg = _compression_cfg()
+            cfg["roi"] = {"min_conf": 0.5, "dilate_px": 6}
+
+            with patch("src.compression.phase4_codec.probe_video", return_value=VideoInfo(32, 24, 30.0, 10)):
+                with patch("src.compression.phase4_codec._capture_rendered_kept_frames_single_pass", return_value=fake_cache):
                     with patch(
-                        "src.compression.phase4_dcvc.encode_dcvc_frames_to_bytes",
+                        "src.compression.phase4_codec.encode_ffmpeg_frames_to_bytes",
                         side_effect=[fake_roi, fake_bg],
                     ):
-                        out = compress_keep_streams_dcvc(
+                        out = compress_keep_streams(
                             source_video_path=video_path,
                             roi_bbox_map={},
                             frame_drop_result={"roi_kept_frames": [2, 5], "bg_kept_frames": [0]},
-                            compression_cfg={
-                                "dcvc": {
-                                    "repo_dir": str(repo_dir),
-                                    "model_i": str(model_i),
-                                    "model_p": str(model_p),
-                                    "use_cuda": True,
-                                },
-                                "quality": {"roi_qp_i": 1, "roi_qp_p": 1, "bg_qp_i": 1, "bg_qp_p": 1},
-                                "roi": {"min_conf": 0.5, "dilate_px": 6},
-                            },
+                            compression_cfg=cfg,
                             root_dir=ROOT,
                         )
 
@@ -76,27 +89,36 @@ class TestPhase4Metadata(unittest.TestCase):
         self.assertEqual(out["meta"]["roi"]["dilate_px"], 0)
         self.assertEqual(out["meta"]["roi"]["visible_dilate_px"], 0)
         self.assertEqual(out["meta"]["roi"]["requested_dilate_px"], 6)
+        self.assertEqual(out["meta"]["streams"]["roi"]["codec"], "av1")
+        self.assertEqual(out["meta"]["streams"]["bg"]["codec"], "hevc")
 
     def test_phase4_rejects_inconsistent_encoder_frame_index_map(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             video_path = tmp / "video.mp4"
-            model_i = tmp / "i.pth.tar"
-            model_p = tmp / "p.pth.tar"
-            repo_dir = tmp / "DCVC"
-
             video_path.write_bytes(b"video")
-            model_i.write_bytes(b"i")
-            model_p.write_bytes(b"p")
-            repo_dir.mkdir(parents=True, exist_ok=True)
 
             fake_roi = {
                 "bitstream_bytes": b"roi",
-                "meta": {"frames_encoded": 2, "frame_index_map": [2], "device": "cuda"},
+                "meta": {
+                    "frames_encoded": 2,
+                    "frame_index_map": [2],
+                    "codec": "av1",
+                    "encoder": "libsvtav1",
+                    "container": "mkv",
+                    "qp": 10,
+                },
             }
             fake_bg = {
                 "bitstream_bytes": b"bg",
-                "meta": {"frames_encoded": 1, "frame_index_map": [4], "device": "cuda"},
+                "meta": {
+                    "frames_encoded": 1,
+                    "frame_index_map": [4],
+                    "codec": "hevc",
+                    "encoder": "libx265",
+                    "container": "mkv",
+                    "qp": 35,
+                },
             }
             fake_cache = {
                 "roi_store": None,
@@ -107,27 +129,21 @@ class TestPhase4Metadata(unittest.TestCase):
                 "bg_count": 1,
             }
 
-            with patch("src.compression.phase4_dcvc.probe_video", return_value=VideoInfo(32, 24, 30.0, 10)):
-                with patch("src.compression.phase4_dcvc._capture_rendered_kept_frames_single_pass", return_value=fake_cache):
+            cfg = _compression_cfg()
+            cfg["roi"] = {"min_conf": 0.5}
+
+            with patch("src.compression.phase4_codec.probe_video", return_value=VideoInfo(32, 24, 30.0, 10)):
+                with patch("src.compression.phase4_codec._capture_rendered_kept_frames_single_pass", return_value=fake_cache):
                     with patch(
-                        "src.compression.phase4_dcvc.encode_dcvc_frames_to_bytes",
+                        "src.compression.phase4_codec.encode_ffmpeg_frames_to_bytes",
                         side_effect=[fake_roi, fake_bg],
                     ):
                         with self.assertRaises(RuntimeError):
-                            compress_keep_streams_dcvc(
+                            compress_keep_streams(
                                 source_video_path=video_path,
                                 roi_bbox_map={},
                                 frame_drop_result={"roi_kept_frames": [2, 5], "bg_kept_frames": [0]},
-                                compression_cfg={
-                                    "dcvc": {
-                                        "repo_dir": str(repo_dir),
-                                        "model_i": str(model_i),
-                                        "model_p": str(model_p),
-                                        "use_cuda": True,
-                                    },
-                                    "quality": {"roi_qp_i": 1, "roi_qp_p": 1, "bg_qp_i": 1, "bg_qp_p": 1},
-                                    "roi": {"min_conf": 0.5},
-                                },
+                                compression_cfg=cfg,
                                 root_dir=ROOT,
                             )
 
@@ -135,14 +151,7 @@ class TestPhase4Metadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             video_path = tmp / "video.mp4"
-            model_i = tmp / "i.pth.tar"
-            model_p = tmp / "p.pth.tar"
-            repo_dir = tmp / "DCVC"
-
             video_path.write_bytes(b"video")
-            model_i.write_bytes(b"i")
-            model_p.write_bytes(b"p")
-            repo_dir.mkdir(parents=True, exist_ok=True)
 
             frames = [
                 np.full((4, 6, 3), 10, dtype=np.uint8),
@@ -170,34 +179,31 @@ class TestPhase4Metadata(unittest.TestCase):
                 def release(self):
                     return None
 
-            def _fake_encode(frame_iter, *, info, cfg, video_path):
+            def _fake_encode(frame_iter, *, info, cfg, stream_name, video_path):
                 items = list(frame_iter)
                 return {
-                    "bitstream_bytes": video_path.encode("utf-8"),
+                    "bitstream_bytes": f"{stream_name}:{video_path}".encode("utf-8"),
                     "meta": {
                         "frames_encoded": len(items),
                         "frame_index_map": [idx for idx, _ in items],
-                        "device": "cuda:0",
+                        "codec": "av1" if stream_name == "roi" else "hevc",
+                        "encoder": "libsvtav1" if stream_name == "roi" else "libx265",
+                        "container": "mkv",
+                        "qp": 10 if stream_name == "roi" else 35,
                     },
                 }
 
-            with patch("src.compression.phase4_dcvc.probe_video", return_value=VideoInfo(6, 4, 30.0, 3)):
-                with patch("src.compression.phase4_dcvc.cv2.VideoCapture", side_effect=lambda *_: _FakeCapture(frames)):
-                    with patch("src.compression.phase4_dcvc.encode_dcvc_frames_to_bytes", side_effect=_fake_encode):
-                        out = compress_keep_streams_dcvc(
+            cfg = _compression_cfg()
+            cfg["roi"] = {"min_conf": 0.0}
+
+            with patch("src.compression.phase4_codec.probe_video", return_value=VideoInfo(6, 4, 30.0, 3)):
+                with patch("src.compression.phase4_codec.cv2.VideoCapture", side_effect=lambda *_: _FakeCapture(frames)):
+                    with patch("src.compression.phase4_codec.encode_ffmpeg_frames_to_bytes", side_effect=_fake_encode):
+                        out = compress_keep_streams(
                             source_video_path=video_path,
                             roi_bbox_map={},
                             frame_drop_result={"roi_kept_frames": [0, 2], "bg_kept_frames": [1, 2]},
-                            compression_cfg={
-                                "dcvc": {
-                                    "repo_dir": str(repo_dir),
-                                    "model_i": str(model_i),
-                                    "model_p": str(model_p),
-                                    "use_cuda": True,
-                                },
-                                "quality": {"roi_qp_i": 1, "roi_qp_p": 1, "bg_qp_i": 1, "bg_qp_p": 1},
-                                "roi": {"min_conf": 0.0},
-                            },
+                            compression_cfg=cfg,
                             root_dir=ROOT,
                         )
 

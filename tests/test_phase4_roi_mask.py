@@ -10,7 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.compression.phase4_dcvc import _apply_roi_mask  # noqa: E402
+from src.compression.phase4_codec import _apply_roi_mask  # noqa: E402
 from src.decompression.common import _frame_mask  # noqa: E402
 
 

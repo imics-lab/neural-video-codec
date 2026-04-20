@@ -1,12 +1,27 @@
 {
   "version": "1.0",
+  "github_repo": "imics-lab/neural-video-codec",
+  "release_tag": "nevc-models",
   "models": [
     {
-      "name": "diffusion_4x.pth",
-      "description": "ROI-aware diffusion super-resolution model, 4x scale",
-      "sha256": "a066e69eb64d58c2e0a439beb871ac4cf153422c47bf2e616f6bed93b1ceb1e7",
-      "size_mb": 473.0,
-      "download_url": "https://github.com/YOUR_ORG/gpu_upscaling/releases/download/v1.0/diffusion_4x.pth"
+      "file": "MDV6-yolov9-c.pt",
+      "sha256": "daa6cd5d2e3fd52754889cd9c702f73c0349a8388318952e6eaf83e0667543e4",
+      "size_bytes": 51572347
+    },
+    {
+      "file": "MDV6-yolov9-c.onnx",
+      "sha256": "d31c708763d93e2680131cb915169f6b16ef009e50bc31179872dfcdc5d5ddeb",
+      "size_bytes": 102875669
+    },
+    {
+      "file": "amt-s.pth",
+      "sha256": "b0e5999aa804efb851936b6fe949281725e2f4820876fecc0103874ce41ed85d",
+      "size_bytes": 12038295
+    },
+    {
+      "file": "amt-l.pth",
+      "sha256": "8e259cf07c3adfd53555bbb0a73221d24f4a08735a40f8375a6b6ac10fac8cf6",
+      "size_bytes": 51816355
     }
   ]
 }

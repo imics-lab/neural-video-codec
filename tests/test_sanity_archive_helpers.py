@@ -34,8 +34,8 @@ class TestSanityArchiveHelpers(unittest.TestCase):
                     "roi": {"frames_encoded": 1, "frame_index_map": [0]},
                     "bg": {"frames_encoded": 1, "frame_index_map": [0]},
                 },
-                "roi_detection": {"model_selection": {"selected_format": "default"}},
-                "runtime": {"dcvc_device_selected": "cuda:0"},
+                "roi_detection": {"model_selection": {"selected_format": "pt"}},
+                "runtime": {"codec_backend_selected": "ffmpeg"},
                 "sizes": {},
             }
             frame_drop = {

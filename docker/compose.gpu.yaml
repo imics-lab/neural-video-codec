@@ -24,7 +24,7 @@ services:
       - ../data:/app/data
       - ../models:/app/models
       - ../outputs:/app/outputs
-    command: [ "python", "run_compression.py", "video.mp4", "--config", "configs/gpu/compression.yaml", "--output", "outputs/video.zip" ]
+    command: [ "bash", "docker/run_compression.sh" ]
 
   decompression-gpu:
     profiles: [ "stage-tools" ]
@@ -38,7 +38,7 @@ services:
       - ../data:/app/data
       - ../models:/app/models
       - ../outputs:/app/outputs
-    command: [ "python", "run_decompression.py", "outputs/video.zip", "--config", "configs/gpu/decompression.yaml", "--output", "outputs/video_reconstructed.mp4" ]
+    command: [ "bash", "docker/run_decompression.sh" ]
 
   upscaling:
     profiles: [ "stage-tools" ]

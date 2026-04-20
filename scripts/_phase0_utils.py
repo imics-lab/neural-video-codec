@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_COMPRESSION_CONFIG = ROOT / "configs" / "gpu" / "compression.yaml"
 DEFAULT_DECOMPRESSION_CONFIG = ROOT / "configs" / "gpu" / "decompression.yaml"
+DEFAULT_SAMPLE_VIDEO = ROOT / "data" / "test.mp4"
 ARCHIVE_MANIFEST_NAME = "archive_manifest.json"
 ARCHIVE_REQUIRED_ENTRIES = (
     "meta.json",
@@ -99,14 +100,17 @@ def resolve_video_path(cfg: Dict[str, Any], cli_video: Optional[str]) -> Path:
 
     input_cfg = cfg.get("input", {}) or {}
     raw = input_cfg.get("video_path") or input_cfg.get("video") or cfg.get("input_video") or cfg.get("video")
-    if not raw:
-        raise KeyError(
-            "Video path not found. Pass --video, or set input.video_path only in a custom config."
-        )
-    p = resolve_from_root(str(raw))
-    if not p.exists():
-        raise FileNotFoundError(f"Video not found: {p}")
-    return p
+    if raw:
+        p = resolve_from_root(str(raw))
+        if not p.exists():
+            raise FileNotFoundError(f"Video not found: {p}")
+        return p
+    if DEFAULT_SAMPLE_VIDEO.exists():
+        return DEFAULT_SAMPLE_VIDEO.resolve()
+    raise KeyError(
+        "Video path not found. Pass --video, set input.video_path in a custom config, "
+        "or add data/test.mp4 as the default sample clip."
+    )
 
 
 def resolve_out_dir(cli_out_dir: Optional[str], default_rel: str) -> Path:

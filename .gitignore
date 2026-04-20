@@ -62,6 +62,8 @@ temp/
 # IDE & OS specific
 .vscode/
 .idea/
+.agents/
+.cursor/
 *.sw[a-z]
 *~
 .DS_Store

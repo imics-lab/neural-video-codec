@@ -36,7 +36,12 @@ def _parse_args() -> argparse.Namespace:
         default=str(DEFAULT_COMPRESSION_CONFIG),
         help="Compression config YAML path",
     )
-    parser.add_argument("--video", type=str, default=None, help="Optional input video override")
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Optional input video override. Defaults to data/test.mp4 when available.",
+    )
     parser.add_argument(
         "--out-dir",
         type=str,
@@ -102,10 +107,10 @@ def _read_archive_metrics(archive_path: Path) -> Dict[str, Any]:
         "bg_frame_index_map_sha256": sha256_json(list(bg_stream.get("frame_index_map", []) or [])),
         "roi_model_format_selected": str(model_selection.get("selected_format", "")),
         "roi_model_path_selected": str(model_selection.get("selected_model_path", "")),
-        "roi_model_prefer_onnx": bool(model_selection.get("prefer_onnx", False)),
+        "roi_model_resolved_path_selected": str(model_selection.get("selected_model_resolved_path", "")),
+        "roi_model_fallback_reason": str(model_selection.get("fallback_reason", "")),
         "roi_model_prefer_onnx_strict": bool(model_selection.get("prefer_onnx_strict", False)),
-        "dcvc_device_selected": str(runtime_meta.get("dcvc_device_selected", "")),
-        "dcvc_cuda_idx_selected": runtime_meta.get("dcvc_cuda_idx_selected", None),
+        "codec_backend_selected": str(runtime_meta.get("codec_backend_selected", "")),
         "meta_size_reported": meta.get("sizes", {}),
     }
 
@@ -137,7 +142,7 @@ def _run_compression_once(
     out_cfg["frame_drop_json"] = "frame_drop.json"
     out_cfg["roi_bin"] = "roi.bin"
     out_cfg["bg_bin"] = "bg.bin"
-    out_cfg["dcvc_meta"] = "meta.json"
+    out_cfg["meta_json"] = "meta.json"
 
     runtime_cfg_path = run_dir / "compression_config.runtime.yaml"
     write_yaml(runtime_cfg_path, runtime_cfg)
@@ -206,10 +211,10 @@ def _check_reproducibility(run_summaries: List[Dict[str, Any]]) -> List[str]:
         "bg_frame_index_map_sha256",
         "roi_model_format_selected",
         "roi_model_path_selected",
-        "roi_model_prefer_onnx",
+        "roi_model_resolved_path_selected",
+        "roi_model_fallback_reason",
         "roi_model_prefer_onnx_strict",
-        "dcvc_device_selected",
-        "dcvc_cuda_idx_selected",
+        "codec_backend_selected",
     ]
     baseline = run_summaries[0]
     issues: List[str] = []
@@ -312,7 +317,7 @@ def main() -> None:
         print(
             f"  run_{run['run_index']:02d} runtime   : "
             f"roi_model={run['roi_model_format_selected']} "
-            f"dcvc={run['dcvc_device_selected']}"
+            f"codec={run['codec_backend_selected']}"
         )
     if size_issues:
         print("  size_check            : FAILED (allowed by --allow-larger)")

@@ -298,7 +298,7 @@ def _effective_decompression_runtime(
     return {
         "runtime_device": runtime_device,
         "decompression": dec_cfg,
-        "archive_dcvc": meta_copy.get("dcvc", {}),
+        "archive_codec": meta_copy.get("codec", {}),
         "requested_overrides": {
             "max_frames": int(max_frames),
             "no_interpolate": bool(no_interpolate),
@@ -317,7 +317,7 @@ def main() -> None:
     if not archive_path.exists():
         raise FileNotFoundError(f"Archive not found: {archive_path}")
     cfg_path = resolve_from_root(args.config)
-    _ = load_yaml(cfg_path)  # validate YAML shape early
+    _ = load_yaml(cfg_path)
     meta = _read_archive_meta(archive_path)
     out_root = resolve_out_dir(args.out_dir, "outputs/sanity_checks/decompression")
     effective_runtime = _effective_decompression_runtime(
@@ -444,4 +444,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

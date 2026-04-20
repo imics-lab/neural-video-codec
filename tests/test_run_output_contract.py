@@ -19,6 +19,15 @@ import run_compression  # noqa: E402
 from src.decompression import common as rd  # noqa: E402
 
 
+def _codec_cfg() -> dict:
+    return {
+        "ffmpeg_bin": "ffmpeg",
+        "ffprobe_bin": "ffprobe",
+        "roi": {"codec": "av1", "encoder": "libsvtav1", "container": "mkv", "preset": 0, "qp": 10},
+        "bg": {"codec": "hevc", "encoder": "libx265", "container": "mkv", "preset": "medium", "qp": 35},
+    }
+
+
 class TestRunOutputContract(unittest.TestCase):
     def test_main_writes_zip_and_removes_raw_outputs(self) -> None:
         run_suffix = uuid.uuid4().hex
@@ -29,23 +38,17 @@ class TestRunOutputContract(unittest.TestCase):
             tmp = Path(td)
             video_path = tmp / "video.mp4"
             yolo_model = tmp / "yolo.pt"
-            model_i = tmp / "i.pth.tar"
-            model_p = tmp / "p.pth.tar"
-            dcvc_dir = tmp / "DCVC"
 
             video_path.write_bytes(b"v")
             yolo_model.write_bytes(b"m")
-            model_i.write_bytes(b"i")
-            model_p.write_bytes(b"p")
-            dcvc_dir.mkdir(parents=True, exist_ok=True)
 
             cfg = {
                 "input": {"video_path": str(video_path)},
                 "roi_detection": {"enable": False, "paths": {"animal_model_path": str(yolo_model)}},
                 "frame_removal": {"params": {"motion": {"t_low": 1.0, "t_high": 2.0}}},
                 "compression": {
-                    "dcvc": {"repo_dir": str(dcvc_dir), "model_i": str(model_i), "model_p": str(model_p), "use_cuda": True, "reset_interval": 1},
-                    "quality": {"roi_qp_i": 1, "roi_qp_p": 1, "bg_qp_i": 1, "bg_qp_p": 1},
+                    "codec": _codec_cfg(),
+                    "quality": {"roi_qp_i": 10, "roi_qp_p": 10, "bg_qp_i": 35, "bg_qp_p": 35},
                     "roi": {"min_conf": 0.25},
                 },
                 "output": {
@@ -55,7 +58,7 @@ class TestRunOutputContract(unittest.TestCase):
                     "frame_drop_json": "frame_drop.json",
                     "roi_bin": "roi.bin",
                     "bg_bin": "bg.bin",
-                    "dcvc_meta": "meta.json",
+                    "meta_json": "meta.json",
                 },
             }
             cfg_path = tmp / "cfg.yaml"
@@ -71,14 +74,12 @@ class TestRunOutputContract(unittest.TestCase):
 
             with patch.object(run_compression, "_cuda_is_available", return_value=True):
                 with patch.object(run_compression, "remove_redundant_frames", return_value=fake_frame_result):
-                    with patch.object(run_compression, "compress_keep_streams_dcvc", return_value=fake_compression_result):
+                    with patch.object(run_compression, "compress_keep_streams", return_value=fake_compression_result):
                         with patch.object(sys, "argv", ["run_compression.py", str(video_path), "--config", str(cfg_path)]):
                             run_compression.main()
 
             zip_path = out_dir_abs / "video.zip"
             self.assertTrue(zip_path.exists(), "Expected output zip file")
-
-            # Only zip should remain from pipeline artifacts.
             self.assertFalse((out_dir_abs / "roi_detections.json").exists())
             self.assertFalse((out_dir_abs / "frame_drop.json").exists())
             self.assertFalse((out_dir_abs / "roi.bin").exists())
@@ -106,29 +107,31 @@ class TestRunOutputContract(unittest.TestCase):
         if out_dir_abs.exists():
             shutil.rmtree(out_dir_abs)
 
-    def test_strict_gpu_rejects_use_cuda_false(self) -> None:
+    def test_runtime_fallbacks_record_ffmpeg_backend(self) -> None:
         cfg = {
             "roi_detection": {"enable": False},
-            "compression": {"dcvc": {"use_cuda": False}},
+            "compression": {"codec": _codec_cfg()},
         }
-        with patch.object(run_compression, "_cuda_is_available", return_value=True):
-            with self.assertRaises(ValueError):
-                run_compression._apply_runtime_device_fallbacks(cfg)
+        report = run_compression._apply_runtime_device_fallbacks(cfg)
+        self.assertEqual(report["codec_backend_selected"], "ffmpeg")
+        self.assertEqual(report["codec_ffmpeg_bin"], "ffmpeg")
 
     def test_model_select_prefers_onnx_with_gpu_provider(self) -> None:
-        cfg = {
-            "roi_detection": {
-                "paths": {
-                    "animal_model_path": "models/MDV6-yolov9-c.pt",
-                    "animal_model_path_onnx": "models/MDV6-yolov9-c.onnx",
-                },
-                "runtime": {
-                    "prefer_onnx": True,
-                    "prefer_onnx_strict": False,
-                },
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            pt_model = tmp / "model.pt"
+            onnx_model = tmp / "model.onnx"
+            pt_model.write_bytes(b"pt")
+            onnx_model.write_bytes(b"onnx")
+            cfg = {
+                "roi_detection": {
+                    "paths": {
+                        "animal_model_path": str(pt_model),
+                        "animal_model_path_onnx": str(onnx_model),
+                    },
+                    "runtime": {},
+                }
             }
-        }
-        with patch.object(run_compression, "_resolve_config_path", return_value=Path(__file__)):
             with patch.object(
                 run_compression,
                 "_detect_onnx_gpu_provider",
@@ -136,68 +139,79 @@ class TestRunOutputContract(unittest.TestCase):
             ):
                 selected = run_compression._select_roi_model_for_runtime(cfg)
         self.assertEqual(selected["selected_format"], "onnx")
-        self.assertEqual(selected["selected_model_path"], "models/MDV6-yolov9-c.onnx")
+        self.assertEqual(selected["selected_model_path"], str(onnx_model))
+        self.assertEqual(selected["selected_model_resolved_path"], str(onnx_model.resolve()))
         self.assertIsNone(selected["fallback_reason"])
 
-    def test_model_select_defaults_to_pt_without_onnx_preference(self) -> None:
-        cfg = {
-            "roi_detection": {
-                "paths": {
-                    "animal_model_path": "models/MDV6-yolov9-c.pt",
-                    "animal_model_path_onnx": "models/MDV6-yolov9-c.onnx",
-                },
-                "runtime": {},
+    def test_model_select_falls_back_to_pt_when_onnx_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            pt_model = tmp / "model.pt"
+            pt_model.write_bytes(b"pt")
+            cfg = {
+                "roi_detection": {
+                    "paths": {
+                        "animal_model_path": str(pt_model),
+                        "animal_model_path_onnx": str(tmp / "missing.onnx"),
+                    },
+                    "runtime": {},
+                }
             }
-        }
-        with patch.object(run_compression, "_resolve_config_path", return_value=Path(__file__)):
             with patch.object(
                 run_compression,
                 "_detect_onnx_gpu_provider",
                 return_value=(True, "CUDAExecutionProvider"),
             ):
                 selected = run_compression._select_roi_model_for_runtime(cfg)
-        self.assertEqual(selected["selected_format"], "default")
-        self.assertEqual(selected["selected_model_path"], "models/MDV6-yolov9-c.pt")
+        self.assertEqual(selected["selected_format"], "pt")
+        self.assertEqual(selected["selected_model_path"], str(pt_model))
+        self.assertEqual(selected["fallback_reason"], "onnx_missing_fallback_pt")
         self.assertFalse(selected["prefer_onnx"])
 
     def test_model_select_falls_back_to_pt_when_onnx_runtime_unavailable(self) -> None:
-        cfg = {
-            "roi_detection": {
-                "paths": {
-                    "animal_model_path": "models/MDV6-yolov9-c.pt",
-                    "animal_model_path_onnx": "models/MDV6-yolov9-c.onnx",
-                },
-                "runtime": {
-                    "prefer_onnx": True,
-                    "prefer_onnx_strict": False,
-                },
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            pt_model = tmp / "model.pt"
+            onnx_model = tmp / "model.onnx"
+            pt_model.write_bytes(b"pt")
+            onnx_model.write_bytes(b"onnx")
+            cfg = {
+                "roi_detection": {
+                    "paths": {
+                        "animal_model_path": str(pt_model),
+                        "animal_model_path_onnx": str(onnx_model),
+                    },
+                    "runtime": {},
+                }
             }
-        }
-        with patch.object(run_compression, "_resolve_config_path", return_value=Path(__file__)):
             with patch.object(
                 run_compression,
                 "_detect_onnx_gpu_provider",
                 return_value=(False, "onnxruntime_import_error:ModuleNotFoundError"),
             ):
                 selected = run_compression._select_roi_model_for_runtime(cfg)
-        self.assertEqual(selected["selected_format"], "default")
-        self.assertEqual(selected["selected_model_path"], "models/MDV6-yolov9-c.pt")
-        self.assertEqual(selected["fallback_reason"], "onnx_runtime_unavailable_fallback_default")
+        self.assertEqual(selected["selected_format"], "pt")
+        self.assertEqual(selected["selected_model_path"], str(pt_model))
+        self.assertEqual(selected["fallback_reason"], "onnx_runtime_unavailable_fallback_pt")
 
     def test_model_select_strict_onnx_raises_when_runtime_unavailable(self) -> None:
-        cfg = {
-            "roi_detection": {
-                "paths": {
-                    "animal_model_path": "models/MDV6-yolov9-c.pt",
-                    "animal_model_path_onnx": "models/MDV6-yolov9-c.onnx",
-                },
-                "runtime": {
-                    "prefer_onnx": True,
-                    "prefer_onnx_strict": True,
-                },
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            pt_model = tmp / "model.pt"
+            onnx_model = tmp / "model.onnx"
+            pt_model.write_bytes(b"pt")
+            onnx_model.write_bytes(b"onnx")
+            cfg = {
+                "roi_detection": {
+                    "paths": {
+                        "animal_model_path": str(pt_model),
+                        "animal_model_path_onnx": str(onnx_model),
+                    },
+                    "runtime": {
+                        "prefer_onnx_strict": True,
+                    },
+                }
             }
-        }
-        with patch.object(run_compression, "_resolve_config_path", return_value=Path(__file__)):
             with patch.object(
                 run_compression,
                 "_detect_onnx_gpu_provider",
@@ -205,6 +219,22 @@ class TestRunOutputContract(unittest.TestCase):
             ):
                 with self.assertRaises(RuntimeError):
                     run_compression._select_roi_model_for_runtime(cfg)
+
+    def test_model_select_raises_when_both_detector_models_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = {
+                "roi_detection": {
+                    "paths": {
+                        "animal_model_path": str(tmp / "missing.pt"),
+                        "animal_model_path_onnx": str(tmp / "missing.onnx"),
+                    },
+                    "runtime": {},
+                }
+            }
+
+            with self.assertRaises(FileNotFoundError):
+                run_compression._select_roi_model_for_runtime(cfg)
 
     def test_archive_loader_supports_manifest_for_custom_entry_names(self) -> None:
         with tempfile.TemporaryDirectory() as td:

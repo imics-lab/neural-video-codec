@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -23,12 +22,8 @@ MODEL_GROUPS = {
     "compression": [
         "MDV6-yolov9-c.pt",
         "MDV6-yolov9-c.onnx",
-        "cvpr2025_image.pth.tar",
-        "cvpr2025_video.pth.tar",
     ],
     "decompression": [
-        "cvpr2025_image.pth.tar",
-        "cvpr2025_video.pth.tar",
         "amt-s.pth",
         "amt-l.pth",
     ],

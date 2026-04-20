@@ -5,8 +5,13 @@ roi_detection:
     animal_model_path_onnx: "models/MDV6-yolov9-c.onnx"
   runtime:
     device: "cuda:0"
-    # Keep detector backend explicit for reproducible experiments.
+    # Detector backend selection is automatic:
+    # - use animal_model_path_onnx when that file exists
+    # - otherwise fall back to animal_model_path (.pt)
+    # prefer_onnx is kept only for backward-compatible parsing and no longer gates selection.
     prefer_onnx: false
+    # If true, fail instead of falling back to .pt when the ONNX file exists
+    # but GPU ONNX Runtime is unavailable.
     prefer_onnx_strict: false
     half: true
     processing_scale: 0.50
@@ -55,24 +60,34 @@ frame_removal:
     bg_idle_interval: 10
 
 compression:
-  dcvc:
-    repo_dir: "DCVC"
-    model_i: "models/cvpr2025_image.pth.tar"
-    model_p: "models/cvpr2025_video.pth.tar"
-    device: "cuda"
-    use_cuda: true
-    cuda_idx: 0
-    reset_interval: 32
-    intra_period: -1
-    force_zero_thres: null
+  # Low-memory mode streams ROI/BG frames into the ffmpeg encoder instead of
+  # caching all kept full-resolution frames in RAM (reduces peak CPU RAM).
+  low_memory: true
+  codec:
+    ffmpeg_bin: "ffmpeg"
+    ffprobe_bin: "ffprobe"
+    roi:
+      codec: "av1"
+      encoder: "libaom-av1"
+      container: "mkv"
+      preset: "medium"
+      qp: 25
+      pix_fmt: "yuv420p"
+    bg:
+      codec: "hevc"
+      encoder: "libx265"
+      container: "mkv"
+      preset: "medium"
+      qp: 35
+      pix_fmt: "yuv420p"
   roi:
     min_conf: 0.0
     dilate_px: 0
   quality:
-    roi_qp_i: 63
-    roi_qp_p: 63
-    bg_qp_i: 25
-    bg_qp_p: 25
+    roi_qp_i: 25
+    roi_qp_p: 25
+    bg_qp_i: 35
+    bg_qp_p: 35
 
 output:
   write_outputs: true

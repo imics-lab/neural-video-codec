@@ -46,24 +46,20 @@ class TestModelDownloadCommon(unittest.TestCase):
             [
                 "MDV6-yolov9-c.pt",
                 "MDV6-yolov9-c.onnx",
-                "cvpr2025_image.pth.tar",
-                "cvpr2025_video.pth.tar",
             ],
         )
         self.assertEqual(
             [spec.file for spec in decompression],
             [
-                "cvpr2025_image.pth.tar",
-                "cvpr2025_video.pth.tar",
                 "amt-s.pth",
                 "amt-l.pth",
             ],
         )
 
-    def test_manifest_defaults_return_none_when_not_set(self) -> None:
+    def test_manifest_defaults_match_public_release(self) -> None:
         payload = dl.load_manifest_document(ROOT / "models" / "models.manifest.json")
-        self.assertIsNone(dl.manifest_default_repo_slug(payload))
-        self.assertIsNone(dl.manifest_default_release_tag(payload))
+        self.assertEqual(dl.manifest_default_repo_slug(payload), "imics-lab/neural-video-codec")
+        self.assertEqual(dl.manifest_default_release_tag(payload), "nevc-models")
 
     def test_infer_repo_slug_uses_origin_remote(self) -> None:
         with patch("subprocess.run") as run:

@@ -127,15 +127,14 @@ def _validate_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("decompression.roi_blend_edge_px must be >= 0")
     out["roi_blend_edge_px"] = int(roi_blend_edge_px)
 
-    dcvc = out.get("dcvc", {}) or {}
-    if not isinstance(dcvc, dict):
-        dcvc = {}
-    if "use_cuda" in dcvc and _coerce_bool(dcvc.get("use_cuda"), default=True) is False:
-        raise ValueError("Strict GPU runtime forbids decompression.dcvc.use_cuda=false.")
-    dcvc_dev = str(dcvc.get("device", "cuda")).strip().lower()
-    if dcvc_dev in {"cpu", "mps"}:
-        raise ValueError("Strict GPU runtime forbids decompression.dcvc.device set to CPU/MPS.")
-    out["dcvc"] = dcvc
+    archive_codec = out.get("archive_codec", {}) or {}
+    if not isinstance(archive_codec, dict):
+        archive_codec = {}
+    if "ffmpeg_bin" in archive_codec and not isinstance(archive_codec.get("ffmpeg_bin"), str):
+        raise ValueError("decompression.archive_codec.ffmpeg_bin must be a string")
+    if "ffprobe_bin" in archive_codec and not isinstance(archive_codec.get("ffprobe_bin"), str):
+        raise ValueError("decompression.archive_codec.ffprobe_bin must be a string")
+    out["archive_codec"] = archive_codec
     return out
 
 

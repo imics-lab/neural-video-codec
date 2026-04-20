@@ -45,7 +45,12 @@ def _parse_args() -> argparse.Namespace:
         default=str(DEFAULT_COMPRESSION_CONFIG),
         help="Compression config YAML path",
     )
-    parser.add_argument("--video", type=str, default=None, help="Optional input video override")
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Optional input video override. Defaults to data/test.mp4 when available.",
+    )
     parser.add_argument(
         "--out-dir",
         type=str,

@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 # Lazy-loaded runtime components so module import stays lightweight for tests/tools.
-compress_keep_streams_dcvc: Optional[Callable[..., Dict[str, Any]]] = None
+compress_keep_streams: Optional[Callable[..., Dict[str, Any]]] = None
 apply_dual_timeline_policy: Optional[Callable[..., Dict[str, Any]]] = None
 build_dual_timeline_metadata: Optional[Callable[..., Dict[str, Any]]] = None
 remove_redundant_frames: Optional[Callable[..., Dict[str, Any]]] = None
@@ -84,7 +84,7 @@ def _configure_runtime_logging(verbose: bool) -> None:
 
 
 def _load_runtime_components() -> None:
-    global compress_keep_streams_dcvc
+    global compress_keep_streams
     global apply_dual_timeline_policy
     global build_dual_timeline_metadata
     global remove_redundant_frames
@@ -93,11 +93,11 @@ def _load_runtime_components() -> None:
     global validate_pipeline_config
     global run_roi_detection
 
-    if compress_keep_streams_dcvc is None:
+    if compress_keep_streams is None:
         try:
-            from compression import compress_keep_streams_dcvc as _compress_keep_streams_dcvc
+            from compression import compress_keep_streams as _compress_keep_streams
 
-            compress_keep_streams_dcvc = _compress_keep_streams_dcvc
+            compress_keep_streams = _compress_keep_streams
         except Exception:
             pass
 
@@ -238,26 +238,37 @@ def _detect_onnx_gpu_provider() -> Tuple[bool, Optional[str]]:
     return False, "onnxruntime_no_gpu_provider"
 
 
+def _config_path_candidate(raw_path: Any) -> Tuple[Optional[str], Optional[Path]]:
+    if raw_path is None:
+        return None, None
+    value = str(raw_path).strip()
+    if not value:
+        return None, None
+    return value, _resolve_config_path(value)
+
+
 def _select_roi_model_for_runtime(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Select the ROI detector backend deterministically from config.
+    Select the ROI detector model for this run.
 
-    Default behavior is to keep the configured `animal_model_path`. ONNX is only
-    selected when `roi_detection.runtime.prefer_onnx=true`. If
-    `prefer_onnx_strict=true`, the run fails instead of silently falling back.
+    Selection rules:
+      1. If ROI detection is disabled, leave model selection inactive.
+      2. If `roi_detection.paths.animal_model_path_onnx` exists, try ONNX first.
+      3. Otherwise use `roi_detection.paths.animal_model_path`.
+      4. If neither candidate is available, fail fast.
 
-    Config keys (roi_detection):
-      paths.animal_model_path         -> default/fallback model path
-      paths.animal_model_path_onnx    -> ONNX model path candidate
-      runtime.prefer_onnx            -> opt into ONNX backend selection
-      runtime.prefer_onnx_strict     -> fail if requested ONNX backend is unavailable
+    `roi_detection.runtime.prefer_onnx` is kept for backward-compatible parsing
+    but no longer gates selection. `prefer_onnx_strict` now means "do not fall
+    back to the .pt checkpoint when the ONNX file exists but GPU ONNX Runtime is
+    unavailable."
     """
     roi_cfg = (cfg.get("roi_detection", {}) or {}).copy()
     paths = (roi_cfg.get("paths", {}) or {}).copy()
     runtime_cfg = (roi_cfg.get("runtime", {}) or {}).copy()
+    roi_enabled = bool(roi_cfg.get("enable", True))
 
-    default_model = paths.get("animal_model_path", None)
-    onnx_model = paths.get("animal_model_path_onnx", None)
+    default_model, default_model_resolved = _config_path_candidate(paths.get("animal_model_path", None))
+    onnx_model, onnx_model_resolved = _config_path_candidate(paths.get("animal_model_path_onnx", None))
     prefer_onnx = bool(runtime_cfg.get("prefer_onnx", False)) if isinstance(runtime_cfg.get("prefer_onnx", False), bool) else False
     prefer_onnx_strict = (
         bool(runtime_cfg.get("prefer_onnx_strict", False))
@@ -265,43 +276,57 @@ def _select_roi_model_for_runtime(cfg: Dict[str, Any]) -> Dict[str, Any]:
         else False
     )
 
-    selected_format = "default"
-    selected_model = default_model
+    selected_format = "disabled" if not roi_enabled else None
+    selected_model = None
+    selected_model_resolved: Optional[Path] = None
     fallback_reason = None
-    onnx_gpu_runtime_ready = False
+    onnx_gpu_runtime_ready: Optional[bool] = None
     onnx_runtime_status: Optional[str] = None
+    onnx_exists = bool(onnx_model_resolved is not None and onnx_model_resolved.exists())
+    default_exists = bool(default_model_resolved is not None and default_model_resolved.exists())
 
-    if prefer_onnx:
-        if onnx_model:
-            onnx_exists = _resolve_config_path(str(onnx_model)).exists()
-            if onnx_exists:
-                onnx_gpu_runtime_ready, onnx_runtime_status = _detect_onnx_gpu_provider()
-                if onnx_gpu_runtime_ready:
-                    selected_model = onnx_model
-                    selected_format = "onnx"
-                elif prefer_onnx_strict:
-                    raise RuntimeError(
-                        "roi_detection.runtime.prefer_onnx=true and prefer_onnx_strict=true, "
-                        "but no GPU ONNX Runtime provider is available."
-                    )
-                else:
-                    fallback_reason = "onnx_runtime_unavailable_fallback_default"
+    if roi_enabled:
+        if onnx_exists:
+            onnx_gpu_runtime_ready, onnx_runtime_status = _detect_onnx_gpu_provider()
+            # Keep ONNX file existence as the primary switch, but fall back to the
+            # .pt checkpoint rather than silently running the ONNX detector on CPU.
+            if onnx_gpu_runtime_ready:
+                selected_model = onnx_model
+                selected_model_resolved = onnx_model_resolved
+                selected_format = "onnx"
+            elif default_exists and not prefer_onnx_strict:
+                selected_model = default_model
+                selected_model_resolved = default_model_resolved
+                selected_format = "pt"
+                fallback_reason = "onnx_runtime_unavailable_fallback_pt"
             else:
-                if prefer_onnx_strict:
-                    raise FileNotFoundError(
-                        f"roi_detection.paths.animal_model_path_onnx does not exist: {_resolve_config_path(str(onnx_model))}"
-                    )
-                fallback_reason = "onnx_missing_fallback_default"
-        else:
-            if prefer_onnx_strict:
-                raise ValueError(
-                    "roi_detection.runtime.prefer_onnx=true and prefer_onnx_strict=true require "
-                    "roi_detection.paths.animal_model_path_onnx to be configured."
+                strict_note = " and strict fallback is enabled" if prefer_onnx_strict else ""
+                raise RuntimeError(
+                    "roi_detection.paths.animal_model_path_onnx exists, but no GPU ONNX Runtime provider is available"
+                    f" ({onnx_runtime_status}){strict_note}."
                 )
-            fallback_reason = "onnx_not_configured_fallback_default"
+        elif default_exists:
+            selected_model = default_model
+            selected_model_resolved = default_model_resolved
+            selected_format = "pt"
+            if onnx_model_resolved is not None:
+                fallback_reason = "onnx_missing_fallback_pt"
+        else:
+            missing_bits = []
+            if onnx_model_resolved is None:
+                missing_bits.append("roi_detection.paths.animal_model_path_onnx is not configured")
+            else:
+                missing_bits.append(f"roi_detection.paths.animal_model_path_onnx not found: {onnx_model_resolved}")
+            if default_model_resolved is None:
+                missing_bits.append("roi_detection.paths.animal_model_path is not configured")
+            else:
+                missing_bits.append(f"roi_detection.paths.animal_model_path not found: {default_model_resolved}")
+            raise FileNotFoundError(
+                "ROI detection is enabled, but no detector model is available. " + "; ".join(missing_bits)
+            )
 
-    if selected_model:
-        paths["animal_model_path"] = str(selected_model)
+    if selected_model_resolved is not None:
+        paths["animal_model_path"] = str(selected_model_resolved)
     roi_cfg["paths"] = paths
     roi_cfg["runtime"] = runtime_cfg
     cfg["roi_detection"] = roi_cfg
@@ -309,8 +334,14 @@ def _select_roi_model_for_runtime(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "selected_format": selected_format,
         "selected_model_path": str(selected_model) if selected_model else None,
+        "selected_model_resolved_path": str(selected_model_resolved) if selected_model_resolved else None,
+        "pt_model_path": (str(default_model) if default_model else None),
+        "pt_model_resolved_path": str(default_model_resolved) if default_model_resolved else None,
+        "pt_model_exists": default_exists if default_model_resolved is not None else None,
         "onnx_model_path": (str(onnx_model) if onnx_model else None),
-        "onnx_gpu_runtime_ready": bool(onnx_gpu_runtime_ready) if onnx_model else None,
+        "onnx_model_resolved_path": str(onnx_model_resolved) if onnx_model_resolved else None,
+        "onnx_model_exists": onnx_exists if onnx_model_resolved is not None else None,
+        "onnx_gpu_runtime_ready": onnx_gpu_runtime_ready,
         "onnx_runtime_status": onnx_runtime_status,
         "prefer_onnx": bool(prefer_onnx),
         "prefer_onnx_strict": bool(prefer_onnx_strict),
@@ -456,105 +487,27 @@ def _pick_best_device_for_roi(raw_device: Any) -> Tuple[Any, str]:
     )
 
 
-def _parse_cuda_index(raw: Any) -> Optional[int]:
-    if raw is None or isinstance(raw, bool):
-        return None
-    if isinstance(raw, int):
-        return int(raw) if raw >= 0 else None
-    s = str(raw).strip()
-    if s.isdigit():
-        return int(s)
-    return None
-
-
-def _parse_use_cuda_compat(raw: Any) -> bool:
-    if isinstance(raw, bool):
-        return bool(raw)
-    s = str(raw).strip().lower()
-    if s in {"1", "true", "yes", "cuda"}:
-        return True
-    if s in {"0", "false", "no", "cpu"}:
-        return False
-    if s == "auto":
-        return _cuda_is_available()
-    return bool(raw)
-
-
-def _pick_dcvc_device(raw_device: Any, raw_use_cuda: Any, raw_cuda_idx: Any) -> Tuple[str, str, bool, Optional[int], bool]:
-    _require_cuda_runtime()
-    req_idx = _parse_cuda_index(raw_cuda_idx)
-
-    if raw_device is None:
-        use_cuda_req = _parse_use_cuda_compat(raw_use_cuda)
-        req_label = "cuda" if use_cuda_req else "cpu"
-    elif isinstance(raw_device, int):
-        req_label = "cuda"
-        req_idx = int(raw_device) if int(raw_device) >= 0 else req_idx
-        use_cuda_req = True
-    else:
-        s = str(raw_device).strip().lower()
-        if not s or s == "auto":
-            req_label = "auto"
-        elif s == "cpu":
-            req_label = "cpu"
-        elif s == "mps":
-            raise ValueError("Strict GPU runtime forbids compression.dcvc.device set to MPS.")
-        elif s == "cuda":
-            req_label = "cuda"
-        elif s.startswith("cuda:"):
-            idx = s.split(":", 1)[1].strip()
-            if idx.isdigit():
-                req_idx = int(idx)
-                req_label = "cuda"
-            else:
-                raise ValueError("compression.dcvc.device must be cuda:<index> when using explicit CUDA index.")
-        elif s.isdigit():
-            req_idx = int(s)
-            req_label = "cuda"
-        else:
-            raise ValueError(
-                "Invalid compression.dcvc.device for strict GPU runtime. "
-                "Use auto, cuda, cuda:<index>, or integer GPU index."
-            )
-        use_cuda_req = req_label != "cpu"
-
-    if req_label == "cpu":
-        raise ValueError("Strict GPU runtime forbids compression.dcvc.device=cpu or use_cuda=false.")
-    return req_label, "cuda", True, (req_idx if req_idx is not None else 0), bool(use_cuda_req)
-
-
 def _apply_runtime_device_fallbacks(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    _require_cuda_runtime()
-    report: Dict[str, Any] = {
-        "cuda_available": True,
-        "runtime_mode": "strict_gpu_only",
-    }
-
     roi_cfg = cfg.get("roi_detection", {}) or {}
     roi_rt = roi_cfg.get("runtime", {}) or {}
     roi_enable = bool(roi_cfg.get("enable", True))
+    report: Dict[str, Any] = {
+        "cuda_available": _cuda_is_available(),
+        "runtime_mode": "gpu_roi_ffmpeg_codec" if roi_enable else "ffmpeg_codec_only",
+    }
 
     comp_cfg = cfg.get("compression", {}) or {}
-    dcvc_cfg = comp_cfg.get("dcvc", {}) or {}
-    req_label, sel_label, dcvc_use_cuda_sel, dcvc_cuda_idx_sel, dcvc_use_cuda_req = _pick_dcvc_device(
-        dcvc_cfg.get("device", None),
-        dcvc_cfg.get("use_cuda", True),
-        dcvc_cfg.get("cuda_idx", None),
-    )
-    dcvc_device_selected = str(sel_label)
-    if dcvc_use_cuda_sel and dcvc_cuda_idx_sel is not None:
-        dcvc_device_selected = f"cuda:{int(dcvc_cuda_idx_sel)}"
-    dcvc_cfg["device"] = dcvc_device_selected
-    dcvc_cfg["use_cuda"] = bool(dcvc_use_cuda_sel)
-    dcvc_cfg["cuda_idx"] = dcvc_cuda_idx_sel if dcvc_use_cuda_sel else None
-    comp_cfg["dcvc"] = dcvc_cfg
+    codec_cfg = comp_cfg.get("codec", {}) or {}
+    if not isinstance(codec_cfg, dict):
+        codec_cfg = {}
+    ffmpeg_bin = str(codec_cfg.get("ffmpeg_bin", "ffmpeg") or "ffmpeg").strip() or "ffmpeg"
+    ffprobe_bin = str(codec_cfg.get("ffprobe_bin", "ffprobe") or "ffprobe").strip() or "ffprobe"
+    comp_cfg["codec"] = codec_cfg
     cfg["compression"] = comp_cfg
 
-    report["dcvc_device_requested"] = str(req_label)
-    report["dcvc_device_selected"] = str(dcvc_device_selected)
-    report["dcvc_use_cuda_requested"] = bool(dcvc_use_cuda_req)
-    report["dcvc_use_cuda_selected"] = bool(dcvc_use_cuda_sel)
-    report["dcvc_cuda_idx_selected"] = dcvc_cuda_idx_sel if dcvc_use_cuda_sel else None
+    report["codec_backend_selected"] = "ffmpeg"
+    report["codec_ffmpeg_bin"] = ffmpeg_bin
+    report["codec_ffprobe_bin"] = ffprobe_bin
 
     if roi_enable:
         requested = roi_rt.get("device", "auto")
@@ -615,7 +568,7 @@ def main() -> None:
     if (
         validate_pipeline_config is None
         or remove_redundant_frames is None
-        or compress_keep_streams_dcvc is None
+        or compress_keep_streams is None
     ):
         raise RuntimeError("Failed to load one or more runtime pipeline components")
 
@@ -662,7 +615,7 @@ def main() -> None:
 
     _status("Encoding ROI and background streams...")
     comp_cfg = cfg.get("compression", {}) or {}
-    compression_result = compress_keep_streams_dcvc(
+    compression_result = compress_keep_streams(
         source_video_path=video_path,
         roi_bbox_map=roi_frames,
         frame_drop_result=frame_result,
@@ -681,8 +634,9 @@ def main() -> None:
         },
     }
     compression_meta["runtime"] = {
-        "dcvc_device_selected": runtime_device.get("dcvc_device_selected", None),
-        "dcvc_cuda_idx_selected": runtime_device.get("dcvc_cuda_idx_selected", None),
+        "codec_backend_selected": runtime_device.get("codec_backend_selected", None),
+        "codec_ffmpeg_bin": runtime_device.get("codec_ffmpeg_bin", None),
+        "codec_ffprobe_bin": runtime_device.get("codec_ffprobe_bin", None),
         "runtime_mode": runtime_device.get("runtime_mode", None),
     }
     compression_meta["provenance"] = _collect_runtime_provenance(cfg_path, video_path)
@@ -714,7 +668,7 @@ def main() -> None:
         "frame_drop.json": str(out_cfg.get("frame_drop_json", "frame_drop.json")),
         "roi.bin": str(out_cfg.get("roi_bin", "roi.bin")),
         "bg.bin": str(out_cfg.get("bg_bin", "bg.bin")),
-        "meta.json": str(out_cfg.get("dcvc_meta", "meta.json")),
+        "meta.json": str(out_cfg.get("meta_json", "meta.json")),
     }
     runtime_cfg_bytes = json.dumps(cfg, indent=2, sort_keys=True).encode("utf-8")
     archive_payloads = {

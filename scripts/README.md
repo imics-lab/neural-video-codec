@@ -1,109 +1,111 @@
-# Phase 0 Sanity Checks
+# Sanity-Check Scripts
 
-Run these checks before any experiment runs.
+These scripts verify the main pipeline stages on a small input. They are not a replacement for the full thesis evaluation.
 
-## 0) Model bootstrap
+## Model Download
 
-Compression-stage models:
+Download all required models:
 
 ```bash
-python scripts/download_compression_models.py --repo owner/repo --tag artifact-v1
+python scripts/download_models.py
 ```
 
-Decompression-stage models:
+Compression-only model download:
 
 ```bash
-python scripts/download_decompression_models.py --repo owner/repo --tag artifact-v1
+python scripts/download_compression_models.py --repo owner/repo --tag release-tag
+```
+
+Decompression-only model download:
+
+```bash
+python scripts/download_decompression_models.py --repo owner/repo --tag release-tag
 ```
 
 Notes:
-- Both scripts save files into `gpu/models/` by default.
-- If the GitHub repo is private, set `GITHUB_TOKEN` before running them.
-- Release asset names must exactly match the filenames listed in `models/models.manifest.json`.
-- For a paper artifact, use a fixed release tag, not `latest`.
 
-## 1) ROI detection sanity
+- scripts save model files into `models/` by default
+- `download_models.py` verifies SHA256 checksums against `docs/model_checksums.sha256`
+- if the GitHub repo is private, set `GITHUB_TOKEN`
+- use a fixed release tag instead of `latest`
+
+## 1. ROI Detection
 
 ```bash
-python scripts/test_roi_detection.py --video data/tune/video.mp4
+python scripts/test_roi_detection.py --video data/test.mp4
 ```
 
-What to inspect:
+Inspect:
+
 - `outputs/sanity_checks/roi_detection/roi_overlay.mp4`
-- Animals should be detected with plausible bounding boxes.
+- whether animal boxes look plausible and temporally stable
 
-## 2) Frame-removal sanity
+## 2. Frame Removal
 
 ```bash
-python scripts/test_frame_removal.py --video data/tune/video.mp4
+python scripts/test_frame_removal.py --video data/test.mp4
 ```
 
-What to inspect:
+Inspect:
+
 - `outputs/sanity_checks/frame_removal/frame_drop_overlay.mp4`
 - `outputs/sanity_checks/frame_removal/roi_kept_preview.mp4`
 - `outputs/sanity_checks/frame_removal/bg_kept_preview.mp4`
-- Dropped frames should look redundant relative to kept anchors.
+- whether dropped frames look redundant relative to retained anchors
 
-## 3) Compression sanity + reproducibility
+## 3. Compression
 
 ```bash
-python scripts/test_compression.py --video data/tune/video.mp4 --repeat 2
+python scripts/test_compression.py --video data/test.mp4 --repeat 2
 ```
 
-Checks performed:
-- Compressed archive size is smaller than source video.
-- Same clip + same config run twice gives identical metrics/hashes.
+Checks:
 
-If repeated runs differ, fix reproducibility before continuing.
+- archive is smaller than source video
+- repeated runs with the same inputs produce stable outputs and summaries
 
-## 4) Decompression sanity
+## 4. Decompression
 
 ```bash
 python scripts/test_decompression.py outputs/video.zip --config configs/gpu/decompression.yaml
 ```
 
-Checks performed:
-- `run_decompression.py` succeeds with the provided archive/config.
-- Reconstructed video is readable and non-empty.
-- Output frame size matches archive metadata.
-- Output frame count matches expected timeline (or `--max-frames` cap).
-- Optional repeat mode validates deterministic reconstructed pixels.
+Checks:
 
-## 5) Full end-to-end visual check
+- decompression completes successfully
+- reconstructed video is readable and non-empty
+- output size and frame count match archive metadata expectations
+
+## 5. Full Visual End-To-End Check
 
 ```bash
-python run_compression.py data/tune/video.mp4 --config configs/gpu/compression.yaml --output outputs/video.zip
+python run_compression.py data/test.mp4 --config configs/gpu/compression.yaml --output outputs/video.zip
 python run_decompression.py outputs/video.zip --config configs/gpu/decompression.yaml --output outputs/sanity_checks/reconstructed/video.mp4
 ```
 
-What to inspect:
-- Reconstructed video quality and temporal consistency.
-- ROI regions should stay coherent without obvious artifacts.
+Inspect:
 
-## Recommended protocol
+- reconstructed visual quality
+- ROI coherence
+- major temporal errors or reconstruction failures
 
-Repeat this process on 2-3 clips (day/night, single/multi-animal) before running real experiments.
+## Typical Order
 
-## Custom config comparisons
+1. verify model downloads
+2. run ROI detection
+3. run frame removal
+4. run compression
+5. run decompression
+6. inspect a small set of day and night clips visually
 
-For controlled profile comparisons, create additional compression YAML files by copying `configs/gpu/compression.yaml` and changing the dual-timeline intervals or QP values you want to test.
+## Path Conventions
 
-Example:
+Run from the repository root.
 
-```bash
-python scripts/test_frame_removal.py --config configs/gpu/compression_custom.yaml --video data/tune/video.mp4
-```
+Expected local directories:
 
-## Notes
+- `data/`
+- `models/`
+- `outputs/`
 
-The scripts in this folder are developer sanity checks only. The public GPU runtime path is:
-- `run_compression.py`
-- `run_decompression.py`
-
-Path handling:
-- You can pass paths relative to `gpu/` like `outputs/...` and `data/...`.
-- If you launch the scripts from the repo root, `gpu/...`-prefixed paths are also accepted.
-
-Debug artifacts:
-- `test_roi_detection.py` and `test_frame_removal.py` write visual debug outputs under `outputs/sanity_checks/...`.
-- `test_compression.py` and `test_decompression.py` store captured runner output tails in each run record inside `summary.json`.
+The scripts write debug outputs under `outputs/sanity_checks/`.
