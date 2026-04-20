@@ -1,0 +1,12 @@
+# Jetson-friendly runtime set for the FFmpeg compression/decompression pipeline.
+# Use Jetson/ARM64 wheels and keep NumPy < 2 for compatibility with ONNX Runtime.
+
+numpy==1.26.4
+opencv-python==4.11.0.86
+onnx==1.21.0
+pillow==12.1.1
+pyyaml==6.0.3
+requests==2.33.1
+scipy==1.15.3
+ultralytics==8.4.39
+onnxruntime-gpu==1.23.0

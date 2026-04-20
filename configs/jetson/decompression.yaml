@@ -1,0 +1,27 @@
+decompression:
+  codec: "mp4v"
+  mask_source: "roi_detection"
+
+  roi_temporal_stabilize: true
+  roi_temporal_alpha_still: 0.70
+  roi_temporal_alpha_motion: 0.92
+  roi_blend_edge_px: 2
+  roi_temporal_mask_dilate: 1
+  roi_temporal_overlap_only: true
+
+  archive_codec:
+    ffmpeg_bin: "ffmpeg"
+
+  # Jetson-friendly default: keep interpolation disabled unless you know the
+  # exact AMT / torch stack is installed correctly on the device.
+  interpolate:
+    enable: false
+    model: "amt-s"
+    weights_path: "models/amt-s.pth"
+    repo_dir: "_third_party_amt"
+    device: "cuda"
+    fp16: true
+    pad_to: 16
+    batch_size: 8
+    crop_margin: 8
+    max_crop_side: 768

@@ -1,0 +1,41 @@
+services:
+  pipeline-jetson:
+    build:
+      context: ..
+      dockerfile: docker/jetson/Dockerfile.jetson
+    image: edge-roi-jetson
+    working_dir: /app
+    runtime: nvidia
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "bash", "docker/jetson/run_pipeline.sh" ]
+
+  compression-jetson:
+    profiles: [ "stage-tools" ]
+    build:
+      context: ..
+      dockerfile: docker/jetson/Dockerfile.jetson
+    image: edge-roi-jetson
+    working_dir: /app
+    runtime: nvidia
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "bash", "docker/jetson/run_compression.sh" ]
+
+  decompression-jetson:
+    profiles: [ "stage-tools" ]
+    build:
+      context: ..
+      dockerfile: docker/jetson/Dockerfile.jetson
+    image: edge-roi-jetson
+    working_dir: /app
+    runtime: nvidia
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../outputs:/app/outputs
+    command: [ "bash", "docker/jetson/run_decompression.sh" ]

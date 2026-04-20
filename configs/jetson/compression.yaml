@@ -1,0 +1,85 @@
+roi_detection:
+  enable: true
+  paths:
+    animal_model_path: "models/MDV6-yolov9-c.pt"
+  runtime:
+    device: "cuda:0"
+    prefer_onnx: false
+    prefer_onnx_strict: false
+    half: true
+    processing_scale: 0.50
+    imgsz: 640
+    conf: 0.25
+    iou_nms: 0.50
+    target_class_ids: [0]
+    start_frame: 0
+    end_frame: -1
+    keyframe_interval: 15
+    model_merge_iou: 0.30
+    bbox_pad_frac: 0.10
+    bbox_pad_px: 8
+  tracking:
+    enable_propagation: true
+    match_iou: 0.30
+    min_hits: 2
+    max_det_gap: 90
+    vel_smooth: 0.70
+    klt_max_points: 80
+    klt_min_points: 10
+
+frame_removal:
+  params:
+    roi:
+      halo_frac: 0.20
+      fixed_size: 160
+      blur_ksize: 5
+      gray: true
+    bbox_smoothing:
+      enable: true
+      ema_alpha: 0.60
+    motion:
+      state_source: "hybrid"
+      t_low: 0.90
+      t_high: 1.90
+      bbox_t_low_px: 0.50
+      bbox_t_high_px: 1.00
+      enter_motion_frames: 2
+      enter_still_frames: 4
+  dual_timeline:
+    enable: true
+    roi_motion_interval: 2
+    roi_still_interval: 3
+    bg_interval: 6
+    bg_idle_interval: 10
+
+compression:
+  low_memory: true
+  codec:
+    ffmpeg_bin: "ffmpeg"
+    ffprobe_bin: "ffprobe"
+    roi:
+      codec: "av1"
+      encoder: "libaom-av1"
+      container: "mkv"
+      preset: "medium"
+      qp: 25
+      pix_fmt: "yuv420p"
+    bg:
+      codec: "hevc"
+      encoder: "libx265"
+      container: "mkv"
+      preset: "medium"
+      qp: 35
+      pix_fmt: "yuv420p"
+  roi:
+    min_conf: 0.0
+    dilate_px: 0
+  quality:
+    roi_qp_i: 25
+    roi_qp_p: 25
+    bg_qp_i: 35
+    bg_qp_p: 35
+
+output:
+  write_outputs: true
+  out_dir: "outputs/compression"
