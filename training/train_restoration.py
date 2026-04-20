@@ -237,6 +237,11 @@ def _build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
     return model.to(device)
 
 
+def _to_np_rgb(t: torch.Tensor) -> np.ndarray:
+    """(3,H,W) float [0,1] → HWC uint8 RGB."""
+    return (t.permute(1, 2, 0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+
 @torch.no_grad()
 def _save_samples(
     model: nn.Module,
@@ -245,68 +250,115 @@ def _save_samples(
     device: torch.device,
     out_dir: Path,
     epoch: int,
-    n_samples: int = 4,
+    n_samples: int = 4,       # unused (kept for call-site compat); video length controls frames
     t_start: int = 200,
     ddim_steps: int = 20,
+    fps: int = 30,
+    video_seconds: float = 1.0,
 ) -> None:
-    """Run DDIM inference on a few val samples and save degraded|restored|original."""
+    """
+    Render a short side-by-side video (degraded | restored | original) for one
+    validation sequence so training progress is easy to assess visually.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     eval_model = model.module if isinstance(model, nn.DataParallel) else model
     eval_model.eval()
 
-    ab = schedule.alphas_cumprod.to(device)
-    indices = list(range(min(n_samples, len(val_ds))))
+    ab       = schedule.alphas_cumprod.to(device)
     step_idx = torch.linspace(t_start, 0, ddim_steps + 1).long()
 
-    for si, idx in enumerate(indices):
-        deg_window, orig_centre = val_ds[idx]           # (T*3, H, W), (3, H, W)
-        T_win = deg_window.shape[0] // 3
-        half  = T_win // 2
+    # ── Pick a sequence directly from the underlying dataset ─────────────────
+    # val_ds may be a Subset; unwrap to reach .sequences
+    base_ds = val_ds.dataset if hasattr(val_ds, "dataset") else val_ds
+    if not hasattr(base_ds, "sequences") or not base_ds.sequences:
+        LOGGER.warning("  _save_samples: no sequences available, skipping")
+        eval_model.train()
+        return
 
-        deg_window  = deg_window.to(device).unsqueeze(0)   # (1, T*3, H, W)
-        orig_centre = orig_centre.to(device)
+    T_win = base_ds.T
+    half  = T_win // 2
+    ps    = base_ds.patch_size
+    n_frames = max(T_win, int(round(fps * video_seconds)))
 
-        # Build degraded frames as conditioning
-        cond_frames = [deg_window[:, ti*3:(ti+1)*3] for ti in range(T_win)]
-        centre_deg  = cond_frames[half].squeeze(0)          # (3, H, W)
+    # Pick the sequence with the most frames (most informative)
+    orig_dir, deg_dir, names = max(base_ds.sequences, key=lambda s: len(s[2]))
+    if len(names) < T_win:
+        LOGGER.warning("  _save_samples: sequence too short, skipping")
+        eval_model.train()
+        return
 
-        # Inject noise at t_start on the centre degraded frame
-        gen = torch.Generator(device=device).manual_seed(idx)
-        noise = torch.randn(1, 3, *centre_deg.shape[-2:], device=device, generator=gen)
-        ab_s = ab[t_start]
-        x = ab_s.sqrt() * (centre_deg.unsqueeze(0) * 2 - 1) + (1 - ab_s).sqrt() * noise
+    # Use a fixed centre crop for temporal consistency across all frames
+    sample_bgr = cv2.imread(str(orig_dir / names[0]))
+    H_full, W_full = sample_bgr.shape[:2]
+    if H_full > ps and W_full > ps:
+        y0 = (H_full - ps) // 2
+        x0 = (W_full - ps) // 2
+    else:
+        y0, x0 = 0, 0
 
-        # DDIM loop
+    def _crop(bgr: np.ndarray) -> np.ndarray:
+        h, w = bgr.shape[:2]
+        if h > ps and w > ps:
+            return bgr[y0:y0+ps, x0:x0+ps]
+        return cv2.resize(bgr, (ps, ps))
+
+    def _load_tensor(path: Path) -> torch.Tensor:
+        bgr  = cv2.imread(str(path))
+        crop = _crop(bgr)
+        rgb  = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return torch.from_numpy(rgb).permute(2, 0, 1).to(device)
+
+    # Frames to render: pick n_frames starting from centre-index half
+    start_fi = half
+    end_fi   = min(start_fi + n_frames, len(names) - half)
+    frame_indices = list(range(start_fi, end_fi))
+
+    # Set up video writer (3× width side-by-side: degraded | restored | original)
+    vid_path = out_dir / f"epoch{epoch+1:04d}.mp4"
+    fourcc   = cv2.VideoWriter_fourcc(*"mp4v")
+    writer   = cv2.VideoWriter(str(vid_path), fourcc, fps, (ps * 3, ps))
+
+    for fi in frame_indices:
+        # Build T-frame window of degraded frames in [-1,1]
+        cond_tensors = []
+        for offset in range(-half, half + 1):
+            clamped = min(max(fi + offset, 0), len(names) - 1)
+            cond_tensors.append(_load_tensor(deg_dir / names[clamped]))
+        orig_t   = _load_tensor(orig_dir / names[fi])
+        centre_t = cond_tensors[half]    # (3, H, W) in [0,1]
+
+        cond_norm = [(t * 2.0 - 1.0).unsqueeze(0) for t in cond_tensors]  # each (1,3,H,W)
+        centre_norm = centre_t * 2.0 - 1.0                                 # (3,H,W)
+
+        gen   = torch.Generator(device=device).manual_seed(fi)
+        noise = torch.randn(1, 3, ps, ps, device=device, generator=gen)
+        x     = ab[t_start].sqrt() * centre_norm.unsqueeze(0) + (1 - ab[t_start]).sqrt() * noise
+
         for i in range(ddim_steps):
             t_cur  = int(step_idx[i].item())
             t_next = int(step_idx[i + 1].item())
             t_b    = torch.full((T_win,), t_cur, device=device, dtype=torch.long)
-            inp_list = [torch.cat([x, (cond_frames[ti] * 2 - 1)], dim=1) for ti in range(T_win)]
-            model_in = torch.cat(inp_list, dim=0)            # (T, 6, H, W)
+            inp    = torch.cat([torch.cat([x, cond_norm[ti]], dim=1) for ti in range(T_win)], dim=0)
             with torch.amp.autocast("cuda"):
-                eps = eval_model(model_in, t_b)
-            eps_c    = eps[half:half+1]
-            ab_t     = ab[t_cur];  ab_p = ab[t_next]
-            x0_pred  = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
-            x0_pred  = x0_pred.clamp(-1, 2)
-            x        = ab_p.sqrt() * x0_pred + (1 - ab_p).sqrt() * eps_c
+                eps = eval_model(inp, t_b)
+            eps_c   = eps[half:half+1].float()
+            ab_t    = ab[t_cur];  ab_p = ab[t_next]
+            x0_pred = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
+            x0_pred = x0_pred.clamp(-1, 2)
+            x       = ab_p.sqrt() * x0_pred + (1 - ab_p).sqrt() * eps_c
 
-        restored = ((x.squeeze(0) + 1.0) * 0.5).clamp(0, 1)  # [-1,1] → [0,1]
+        restored = ((x.squeeze(0) + 1.0) * 0.5).clamp(0, 1)
 
-        def _to_np(t):
-            return (t.permute(1, 2, 0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+        deg_np  = _to_np_rgb(centre_t)
+        rest_np = _to_np_rgb(restored)
+        orig_np = _to_np_rgb(orig_t)
 
-        deg_np  = _to_np(centre_deg)
-        rest_np = _to_np(restored)
-        orig_np = _to_np(orig_centre)
+        row_rgb = np.concatenate([deg_np, rest_np, orig_np], axis=1)
+        writer.write(cv2.cvtColor(row_rgb, cv2.COLOR_RGB2BGR))
 
-        # Save side-by-side: degraded | restored | original
-        grid = np.concatenate([deg_np, rest_np, orig_np], axis=1)
-        path = out_dir / f"epoch{epoch+1:04d}_sample{si:02d}.png"
-        cv2.imwrite(str(path), cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
-
+    writer.release()
     eval_model.train()
-    LOGGER.info(f"  Samples saved → {out_dir}/epoch{epoch+1:04d}_*.png")
+    LOGGER.info(f"  Sample video saved → {vid_path}  ({len(frame_indices)} frames)")
 
 
 def train(args: argparse.Namespace) -> None:
