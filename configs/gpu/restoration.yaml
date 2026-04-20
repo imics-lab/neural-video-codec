@@ -16,7 +16,7 @@ inference:
   tile_overlap: 64             # overlap between tiles for Gaussian blending
   color_fix: false             # _save_samples does not apply color_fix
   batch_size: 2                # window batches processed at once
-  roi_restore_strength: 0.0    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
+  roi_restore_strength: 1.0    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
 
 output:
   out_dir: "outputs/restoration"
