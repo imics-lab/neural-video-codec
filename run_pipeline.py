@@ -316,9 +316,9 @@ def main() -> int:
             frames = [_cv2.resize(f, (_OUT_W, _OUT_H), interpolation=_cv2.INTER_LANCZOS4)
                       for f in frames]
 
+        _h0, _w0 = frames[0].shape[:2]
         _status(f"  Upscaling done in {time.perf_counter()-t3:.1f}s  "
-                f"({frames[0].shape[1]//scale}×{frames[0].shape[0]//scale} → "
-                f"{frames[0].shape[1]}×{frames[0].shape[0]})")
+                f"({_w0}×{_h0})")
     else:
         _status("Step 4/4 — Upscaling SKIPPED")
 
