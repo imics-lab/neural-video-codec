@@ -146,9 +146,9 @@ def main() -> int:
             shutil.copy2(tmp.name, str(orig_path))
             _status(f"  Resized original saved → {orig_path}")
 
-    comp_cfg = _merge_sub_config(pipeline_cfg, "compression")
+    # compress_video expects detection + compression at top level — pass full cfg
     from src.compression.phase_compress import compress_video
-    archive_bytes = compress_video(str(actual_video), comp_cfg)
+    archive_bytes = compress_video(str(actual_video), pipeline_cfg)
 
     if save_intermediate:
         arc_path = out_dir / f"{stem}.zip"
