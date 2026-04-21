@@ -38,5 +38,9 @@ compression:
     dilate_px: 8               # dilate ROI mask before stream split
     min_conf: 0.25             # minimum detection confidence to include in ROI
 
+restoration:
+  config: "configs/gpu/restoration.yaml"
+  enable: true
+
 output:
   out_dir: "outputs/compression"
