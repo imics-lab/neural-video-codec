@@ -43,7 +43,7 @@ restoration:
   enable: true
 
 wan_upscaling:
-  model_id: "Wan-AI/Wan2.1-I2V-14B-480P"
+  model_id: "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
   out_w: 960
   out_h: 720
   chunk_frames: 17        # frames per Wan2.1 call (match model's temporal window)

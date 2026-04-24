@@ -21,7 +21,7 @@ import torch
 from PIL import Image
 
 
-_DEFAULT_MODEL = "Wan-AI/Wan2.1-I2V-14B-480P"
+_DEFAULT_MODEL = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
 _DEFAULT_PROMPT = (
     "high quality, sharp details, no compression artifacts, "
     "professional video, natural motion"
