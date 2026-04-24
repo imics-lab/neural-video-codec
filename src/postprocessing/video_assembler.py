@@ -9,8 +9,8 @@ from typing import Iterable
 import cv2
 import numpy as np
 
-# Codec preference order: software H.264, then MPEG-4 as universal fallback.
-_CODEC_FALLBACKS = ["X264", "avc1", "mp4v", "XVID"]
+# Codec preference order: mp4v first (universally supported), then H.264 variants.
+_CODEC_FALLBACKS = ["mp4v", "X264", "avc1", "XVID"]
 
 
 def assemble_video(
