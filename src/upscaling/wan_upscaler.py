@@ -159,14 +159,20 @@ class WanUpscaler:
             generator          = generator,
         )
 
-        # output.frames is List[List[PIL.Image]] or List[PIL.Image]
+        # output.frames shape varies by diffusers version:
+        #   List[List[PIL.Image]]  — batch of sequences
+        #   List[PIL.Image]        — flat sequence
+        #   np.ndarray (F,H,W,3)  — numpy frames
         raw = output.frames
-        if raw and isinstance(raw[0], list):
-            raw = raw[0]   # unwrap batch dimension
-
-        result = []
-        for pil_frame in raw[:n_frames]:
-            result.append(_pil_to_bgr(pil_frame))
+        if isinstance(raw, np.ndarray):
+            # (F, H, W, 3) uint8 RGB numpy array
+            frames_iter = [raw[i] for i in range(min(len(raw), n_frames))]
+            result = [cv2.cvtColor(f, cv2.COLOR_RGB2BGR) for f in frames_iter]
+        else:
+            # List[PIL.Image] or List[List[PIL.Image]]
+            if raw and isinstance(raw[0], list):
+                raw = raw[0]   # unwrap batch dimension
+            result = [_pil_to_bgr(f) for f in raw[:n_frames]]
         # Pad if Wan returned fewer frames than requested
         while len(result) < n_frames:
             result.append(result[-1].copy())
