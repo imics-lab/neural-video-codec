@@ -80,8 +80,9 @@ class WanUpscaler:
             torch_dtype=torch.bfloat16,
         )
         if cpu_offload:
-            # Offloads model components to CPU between forward passes — saves ~10 GB VRAM
-            self.pipe.enable_model_cpu_offload()
+            # Sequential offload moves each sub-model to CPU immediately after its forward
+            # pass, keeping peak VRAM low without leaving stale tensors on the wrong device.
+            self.pipe.enable_sequential_cpu_offload()
         else:
             self.pipe.to(self.device)
         self.pipe.vae.enable_slicing()
