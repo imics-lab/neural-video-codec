@@ -171,8 +171,13 @@ class WanUpscaler:
                 raw = raw[0]
             if raw.ndim == 3:          # single frame (H,W,3)
                 raw = raw[np.newaxis]  # → (1,H,W,3)
-            result = [cv2.cvtColor(raw[i].astype(np.uint8), cv2.COLOR_RGB2BGR)
-                      for i in range(min(len(raw), n_frames))]
+            result = []
+            for i in range(min(len(raw), n_frames)):
+                f = raw[i]
+                # diffusers returns float32 in [0,1]; scale to [0,255] before uint8 cast
+                if f.dtype != np.uint8:
+                    f = (f * 255).clip(0, 255).astype(np.uint8)
+                result.append(cv2.cvtColor(f, cv2.COLOR_RGB2BGR))
         else:
             # List — flatten any nesting (batch wrapper)
             flat = raw
@@ -181,7 +186,9 @@ class WanUpscaler:
             result = []
             for f in flat[:n_frames]:
                 if isinstance(f, np.ndarray):
-                    result.append(cv2.cvtColor(f.astype(np.uint8), cv2.COLOR_RGB2BGR))
+                    if f.dtype != np.uint8:
+                        f = (f * 255).clip(0, 255).astype(np.uint8)
+                    result.append(cv2.cvtColor(f, cv2.COLOR_RGB2BGR))
                 else:
                     result.append(_pil_to_bgr(f))
         # Pad if Wan returned fewer frames than requested
