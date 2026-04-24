@@ -160,19 +160,30 @@ class WanUpscaler:
         )
 
         # output.frames shape varies by diffusers version:
-        #   List[List[PIL.Image]]  — batch of sequences
-        #   List[PIL.Image]        — flat sequence
-        #   np.ndarray (F,H,W,3)  — numpy frames
+        #   np.ndarray (B, F, H, W, 3) — batched numpy  ← most common with new diffusers
+        #   np.ndarray (F, H, W, 3)    — unbatched numpy
+        #   List[List[PIL.Image]]      — batched PIL
+        #   List[PIL.Image]            — flat PIL
         raw = output.frames
         if isinstance(raw, np.ndarray):
-            # (F, H, W, 3) uint8 RGB numpy array
-            frames_iter = [raw[i] for i in range(min(len(raw), n_frames))]
-            result = [cv2.cvtColor(f, cv2.COLOR_RGB2BGR) for f in frames_iter]
+            # Strip all leading batch dims until we have exactly (F, H, W, 3)
+            while raw.ndim > 4:
+                raw = raw[0]
+            if raw.ndim == 3:          # single frame (H,W,3)
+                raw = raw[np.newaxis]  # → (1,H,W,3)
+            result = [cv2.cvtColor(raw[i].astype(np.uint8), cv2.COLOR_RGB2BGR)
+                      for i in range(min(len(raw), n_frames))]
         else:
-            # List[PIL.Image] or List[List[PIL.Image]]
-            if raw and isinstance(raw[0], list):
-                raw = raw[0]   # unwrap batch dimension
-            result = [_pil_to_bgr(f) for f in raw[:n_frames]]
+            # List — flatten any nesting (batch wrapper)
+            flat = raw
+            while flat and isinstance(flat[0], (list, tuple)):
+                flat = flat[0]
+            result = []
+            for f in flat[:n_frames]:
+                if isinstance(f, np.ndarray):
+                    result.append(cv2.cvtColor(f.astype(np.uint8), cv2.COLOR_RGB2BGR))
+                else:
+                    result.append(_pil_to_bgr(f))
         # Pad if Wan returned fewer frames than requested
         while len(result) < n_frames:
             result.append(result[-1].copy())
