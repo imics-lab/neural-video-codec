@@ -42,5 +42,16 @@ restoration:
   config: "configs/gpu/restoration.yaml"
   enable: true
 
+wan_upscaling:
+  model_id: "Wan-AI/Wan2.1-I2V-14B-480P"
+  out_w: 960
+  out_h: 720
+  chunk_frames: 17        # frames per Wan2.1 call (match model's temporal window)
+  overlap_frames: 4       # blend overlap between chunks
+  num_steps: 20           # diffusion steps
+  guidance_scale: 5.0
+  cpu_offload: true       # offload to CPU between ops to save VRAM
+  seed: 42
+
 output:
   out_dir: "outputs/compression"

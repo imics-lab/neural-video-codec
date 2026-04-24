@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 """
-run_pipeline.py — Full end-to-end pipeline entry point.
+run_pipeline.py — Modular pipeline: mix and match stages freely.
 
-Chains: compress → decompress → restore → upscale
+Available stages (run in the order listed):
+    compress          compress --input video with DCVC → archive in memory
+    decompress        decompress archive → BGR frame list
+    restore           apply RestoreUNet diffusion model
+    upscale-bicubic   Lanczos 4× bicubic resize to out_w × out_h
+    upscale-s3diff    S3Diff one-step diffusion SR
+    upscale-wan       Wan2.1 I2V video upscaling
 
-Usage:
-    python run_pipeline.py --video INPUT.mp4
-                           [--config configs/gpu/pipeline.yaml]
-                           [--output OUTPUT.mp4]
-                           [--downscale 0.5]   # eval mode: compare with original
-                           [--skip-restore]
-                           [--skip-upscale]
-                           [--save-intermediate]
-                           [--verbose]
+Usage examples:
+
+  # Full pipeline (default stages)
+  python run_pipeline.py --video bird1.mp4 --config configs/gpu/compression.yaml
+
+  # Skip restore, compare Wan2.1 upscale straight from decompressed
+  python run_pipeline.py --video bird1.mp4 --config configs/gpu/compression.yaml \\
+      --stages compress decompress upscale-wan
+
+  # Start from an already-decompressed video (skip compress+decompress)
+  python run_pipeline.py --input bird1_decompressed.mp4 --config configs/gpu/compression.yaml \\
+      --stages upscale-wan
+
+  # Restore only (no upscale)
+  python run_pipeline.py --input bird1_decompressed.mp4 --config configs/gpu/compression.yaml \\
+      --stages restore
 """
 from __future__ import annotations
 
@@ -22,17 +35,36 @@ import sys
 if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(encoding="utf-8")
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
+import cv2
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 LOGGER = logging.getLogger("codec.pipeline")
+
+VALID_STAGES = [
+    "compress",
+    "decompress",
+    "restore",
+    "upscale-bicubic",
+    "upscale-s3diff",
+    "upscale-wan",
+]
+DEFAULT_STAGES = ["compress", "decompress", "restore", "upscale-bicubic"]
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _status(msg: str) -> None:
+    print(f"[pipeline] {msg}", flush=True)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -41,293 +73,324 @@ def _setup_logging(verbose: bool) -> None:
     import os; os.environ["YOLO_VERBOSE"] = "true" if verbose else "false"
 
 
-def _status(msg: str) -> None:
-    print(f"[pipeline] {msg}", flush=True)
-
-
 def _load_config(path: str) -> Dict[str, Any]:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Config not found: {p}")
-    if yaml is not None:
-        with open(p) as f:
-            return yaml.safe_load(f) or {}
     with open(p) as f:
-        import json
-        return json.load(f)
+        return (yaml.safe_load(f) if yaml else __import__("json").load(f)) or {}
 
 
 def _merge_sub_config(pipeline_cfg: Dict[str, Any], key: str) -> Dict[str, Any]:
-    """Load a sub-stage config, merging pipeline overrides on top."""
+    """Load a sub-stage config file if referenced, then merge pipeline overrides."""
     sub_cfg_path = (pipeline_cfg.get(key, {}) or {}).get("config", "")
-    if sub_cfg_path and Path(sub_cfg_path).exists():
-        base = _load_config(sub_cfg_path)
-    else:
-        base = {}
-    overrides = pipeline_cfg.get(key, {}) or {}
-    return {**base, **{k: v for k, v in overrides.items() if k != "config"}}
+    base     = _load_config(sub_cfg_path) if sub_cfg_path and Path(sub_cfg_path).exists() else {}
+    overrides = {k: v for k, v in (pipeline_cfg.get(key, {}) or {}).items() if k != "config"}
+    return {**base, **overrides}
 
+
+def _load_video_frames(path: Path):
+    """Read all BGR frames from a video file. Returns (frames, fps)."""
+    cap = cv2.VideoCapture(str(path))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    frames = []
+    while True:
+        ok, frm = cap.read()
+        if not ok:
+            break
+        frames.append(frm)
+    cap.release()
+    return frames, fps
+
+
+def _save_video(frames: List[np.ndarray], path: Path, fps: float) -> None:
+    from src.postprocessing.video_assembler import assemble_video
+    path.parent.mkdir(parents=True, exist_ok=True)
+    assemble_video(iter(frames), path, fps=fps)
+
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Full pipeline: compress → decompress → restore → upscale."
+        description="Modular pipeline: pick any combination of stages.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--video",           required=True)
-    p.add_argument("--config",          default="configs/gpu/pipeline.yaml")
-    p.add_argument("--output",          default=None)
-    p.add_argument("--downscale",       type=float, default=None,
-                   help="Downscale input by this factor (eval mode, e.g. 0.5)")
-    p.add_argument("--skip-restore",    action="store_true")
-    p.add_argument("--skip-upscale",    action="store_true")
-    p.add_argument("--use-s3diff",      action="store_true",
-                   help="Use S3Diff diffusion upscaling instead of Lanczos (slower, higher quality)")
-    p.add_argument("--save-intermediate", action="store_true")
-    p.add_argument("--verbose",         action="store_true")
+    # Input — either raw video (for compress) or pre-decompressed video
+    grp = p.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--video", "--input", dest="input",
+                     help="Input video (raw .mp4 for compress, or decompressed .mp4 otherwise)")
+    p.add_argument("--config",  default="configs/gpu/compression.yaml",
+                   help="Main config YAML (default: configs/gpu/compression.yaml)")
+    p.add_argument("--output",  default=None,
+                   help="Output video path (auto-named if omitted)")
+    p.add_argument("--stages",  nargs="+", default=DEFAULT_STAGES,
+                   metavar="STAGE",
+                   help=(f"Ordered list of stages to run. "
+                         f"Valid: {', '.join(VALID_STAGES)}. "
+                         f"Default: {' '.join(DEFAULT_STAGES)}"))
+    p.add_argument("--save-intermediate", action="store_true",
+                   help="Save video after each stage to output dir")
+    p.add_argument("--out-w",   type=int, default=None, help="Upscale output width")
+    p.add_argument("--out-h",   type=int, default=None, help="Upscale output height")
+    p.add_argument("--verbose", action="store_true")
     return p.parse_args()
 
 
+# ── Stage implementations ─────────────────────────────────────────────────────
+
+def stage_compress(input_video: Path, pipeline_cfg: dict):
+    """Returns archive bytes + detection dict."""
+    _status("compress — DCVC encode ...")
+    from src.compression.phase_compress import compress_video
+    archive_bytes = compress_video(str(input_video), pipeline_cfg)
+    _status(f"  archive size: {len(archive_bytes)/1e6:.2f} MB")
+    return archive_bytes
+
+
+def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
+    """Returns (frames, fps, width, height, detections)."""
+    _status("decompress — DCVC decode ...")
+    import zipfile, io, json as _json
+    from src.decompression.phase_decompress import decompress_archive
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as arc:
+        detections = _json.loads(arc.read("detections.json"))
+    decomp_cfg = _merge_sub_config(pipeline_cfg, "decompression")
+    result = decompress_archive(archive_bytes, decomp_cfg)
+    frames = result["frames"]
+    fps    = result["fps"]
+    width  = result.get("width", frames[0].shape[1] if frames else 0)
+    height = result.get("height", frames[0].shape[0] if frames else 0)
+    _status(f"  {len(frames)} frames @ {fps:.1f} fps  {width}×{height}")
+    # DCVC sets CUDA_VISIBLE_DEVICES — clear it so later CUDA ops work
+    import os; os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    return frames, fps, width, height, detections
+
+
+def stage_restore(frames, fps, width, height, detections, pipeline_cfg: dict):
+    """Returns restored frames list."""
+    _status("restore — RestoreUNet diffusion ...")
+    restore_cfg = _merge_sub_config(pipeline_cfg, "restoration")
+    from src.restoration.phase_restore import restore_frames
+    frames = restore_frames(frames, restore_cfg,
+                            detections=detections, width=width, height=height)
+    _status(f"  restored {len(frames)} frames")
+    return frames
+
+
+def stage_upscale_bicubic(frames, out_w: int, out_h: int):
+    _status(f"upscale-bicubic — Lanczos → {out_w}×{out_h} ...")
+    return [cv2.resize(f, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4) for f in frames]
+
+
+def stage_upscale_s3diff(frames, out_w: int, out_h: int, pipeline_cfg: dict):
+    _status(f"upscale-s3diff — S3Diff → {out_w}×{out_h} ...")
+    import math, random, torch, torch.nn.functional as F, subprocess
+    from torchvision import transforms
+    from huggingface_hub import snapshot_download
+
+    S3DIFF_DIR  = ROOT / "S3Diff"
+    weights_dir = Path(pipeline_cfg.get("upscaling", {}).get("weights_dir", "weights"))
+    DE_NET_PATH = weights_dir / "de_net.pth"
+    S3DIFF_PATH = weights_dir / "s3diff.pkl"
+
+    def _dl(url, dest):
+        import urllib.request
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(url, dest)
+
+    if not S3DIFF_DIR.exists():
+        subprocess.run(["git", "clone",
+            "https://github.com/ArcticHare105/S3Diff.git", str(S3DIFF_DIR)], check=True)
+    if not DE_NET_PATH.exists():
+        _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/de_net.pth", DE_NET_PATH)
+    if not S3DIFF_PATH.exists():
+        _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/s3diff.pkl", S3DIFF_PATH)
+
+    for _p in [str(S3DIFF_DIR / "src"), str(S3DIFF_DIR)]:
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+
+    from s3diff import S3Diff
+    from de_net import DEResNet
+
+    device  = torch.device(pipeline_cfg.get("device", "cuda"))
+    sd_path = snapshot_download(repo_id="stabilityai/sd-turbo")
+    net_sr  = S3Diff(lora_rank_unet=32, lora_rank_vae=16,
+                     sd_path=sd_path, pretrained_path=str(S3DIFF_PATH))
+    net_sr.set_eval().cuda()
+    net_de = DEResNet(num_in_ch=3, num_degradation=2)
+    ckpt = torch.load(str(DE_NET_PATH), map_location="cpu")
+    net_de.load_state_dict(ckpt.get("state_dict", ckpt))
+    net_de.to(device).half().eval()
+
+    seed = int((pipeline_cfg.get("upscaling", {}) or {}).get("seed", 42))
+
+    def _upscale(bgr):
+        rgb    = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        im_lr  = transforms.ToTensor()(rgb).unsqueeze(0).to(device)
+        im_up  = F.interpolate(im_lr, size=(out_h, out_w), mode="bilinear", align_corners=False)
+        im_norm = (im_up * 2.0 - 1.0).clamp(-1.0, 1.0)
+        ph = math.ceil(out_h / 64) * 64 - out_h
+        pw = math.ceil(out_w / 64) * 64 - out_w
+        im_pad = F.pad(im_norm, (0, pw, 0, ph), mode="reflect")
+        with torch.no_grad(), torch.amp.autocast("cuda"):
+            deg = net_de(im_lr.half()).to(device=im_pad.device)
+            out = net_sr(im_pad, deg.float(), prompt="a clear and high quality image")
+        out = out[:, :, :out_h, :out_w]
+        out_np = (out * 0.5 + 0.5).clamp(0, 1).cpu().float()
+        out_np = (out_np[0].permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        return cv2.cvtColor(out_np, cv2.COLOR_RGB2BGR)
+
+    t0 = time.perf_counter()
+    result = []
+    for i, f in enumerate(frames):
+        torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
+        result.append(_upscale(f))
+        if (i + 1) % 10 == 0 or (i + 1) == len(frames):
+            el = time.perf_counter() - t0
+            _status(f"  [{i+1}/{len(frames)}] {(i+1)/el:.1f} fps")
+    return result
+
+
+def stage_upscale_wan(frames, out_w: int, out_h: int, pipeline_cfg: dict):
+    _status(f"upscale-wan — Wan2.1 I2V → {out_w}×{out_h} ...")
+    from src.upscaling.wan_upscaler import WanUpscaler
+    wan_cfg = _merge_sub_config(pipeline_cfg, "wan_upscaling")
+    wan_cfg.setdefault("out_w", out_w)
+    wan_cfg.setdefault("out_h", out_h)
+    wan_cfg.setdefault("device", pipeline_cfg.get("device", "cuda"))
+    upscaler = WanUpscaler(wan_cfg)
+    return upscaler.upscale_sequence(frames)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main() -> int:
-    args   = _parse_args()
+    args = _parse_args()
     _setup_logging(args.verbose)
 
-    # Pre-initialize CUDA context on all visible GPUs before DCVC runs.
-    # DCVC sets CUDA_VISIBLE_DEVICES internally which prevents later access
-    # to GPUs whose context wasn't already established.
-    import torch as _torch
-    for _i in range(_torch.cuda.device_count()):
-        _torch.zeros(1, device=f"cuda:{_i}")
+    stages = [s.lower() for s in args.stages]
+    for s in stages:
+        if s not in VALID_STAGES:
+            print(f"ERROR: unknown stage '{s}'. Valid: {', '.join(VALID_STAGES)}", file=sys.stderr)
+            return 1
+
+    # Validate that upscale stages don't conflict
+    upscale_stages = [s for s in stages if s.startswith("upscale-")]
+    if len(upscale_stages) > 1:
+        print(f"ERROR: only one upscale stage at a time (got: {upscale_stages})", file=sys.stderr)
+        return 1
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        print(f"ERROR: input not found: {input_path}", file=sys.stderr)
+        return 1
 
     pipeline_cfg = _load_config(args.config)
 
-    video_path = Path(args.video)
-    if not video_path.exists():
-        print(f"ERROR: Video not found: {video_path}", file=sys.stderr)
-        return 1
+    # Pre-warm all CUDA contexts before DCVC takes over
+    if "compress" in stages or "decompress" in stages:
+        import torch as _torch
+        for _i in range(_torch.cuda.device_count()):
+            _torch.zeros(1, device=f"cuda:{_i}")
 
-    _input_res = (pipeline_cfg.get("input", {}) or {}).get("input_resolution", "") or ""
-    save_intermediate = args.save_intermediate or bool(
-        (pipeline_cfg.get("output", {}) or {}).get("save_intermediate", False)
-    )
-    out_dir = Path(
-        (pipeline_cfg.get("output", {}) or {}).get("out_dir", "outputs/pipeline")
-    )
+    # Output directory and naming
+    out_dir = Path((pipeline_cfg.get("output", {}) or {}).get("out_dir", "outputs/pipeline"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    stem = input_path.stem
+    final_out = Path(args.output) if args.output else (
+        out_dir / f"{stem}_{'_'.join(stages)}.mp4"
+    )
 
-    stem = video_path.stem
-    if args.output:
-        final_out = Path(args.output)
+    # ── Determine starting state ──────────────────────────────────────────────
+    archive_bytes = None
+    frames: List[np.ndarray] = []
+    fps    = 30.0
+    width  = height = 0
+    detections: dict = {}
+
+    # Out dimensions for upscale stages
+    _input_res = (pipeline_cfg.get("input", {}) or {}).get("input_resolution", "") or ""
+    if _input_res:
+        _rw, _rh = (int(x) for x in _input_res.lower().split("x"))
     else:
-        final_out = out_dir / f"{stem}_pipeline.mp4"
+        _rh, _rw = (0, 0)
 
-    # ── Step 1: Compress ──────────────────────────────────────────────────────
-    _status("Step 1/4 — Compressing ...")
+    out_w = args.out_w or (pipeline_cfg.get("upscaling", {}) or {}).get("out_w", _rw * 2 or 960)
+    out_h = args.out_h or (pipeline_cfg.get("upscaling", {}) or {}).get("out_h", _rh * 2 or 720)
+
     t0 = time.perf_counter()
 
-    # Resize input to target resolution before compression
-    actual_video = video_path
-    if _input_res:
-        import tempfile, cv2
-        _tw, _th = (int(x) for x in _input_res.lower().split("x"))
-        cap = cv2.VideoCapture(str(video_path))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        _status(f"  Resizing input to {_tw}×{_th}")
-        tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, (_tw, _th))
-        while True:
-            ok, frm = cap.read()
-            if not ok: break
-            wtr.write(cv2.resize(frm, (_tw, _th), interpolation=cv2.INTER_AREA))
-        cap.release(); wtr.release()
-        actual_video = Path(tmp.name)
+    # If compress is NOT in stages, load the input video as already-decoded frames
+    if "compress" not in stages:
+        _status(f"Loading decompressed video: {input_path}")
+        frames, fps = _load_video_frames(input_path)
+        h0, w0 = frames[0].shape[:2]
+        width, height = w0, h0
+        # Infer out dimensions from input if not set
+        if out_w == 0: out_w = w0 * 2
+        if out_h == 0: out_h = h0 * 2
+        _status(f"  {len(frames)} frames @ {fps:.1f} fps  {w0}×{h0}")
 
-        if save_intermediate:
-            import shutil
-            orig_path = out_dir / f"{stem}_original.mp4"
-            shutil.copy2(tmp.name, str(orig_path))
-            _status(f"  Resized original saved → {orig_path}")
+    # ── Run stages ────────────────────────────────────────────────────────────
+    for stage in stages:
+        t_s = time.perf_counter()
 
-    # compress_video expects detection + compression at top level — pass full cfg
-    from src.compression.phase_compress import compress_video
-    archive_bytes = compress_video(str(actual_video), pipeline_cfg)
+        if stage == "compress":
+            # Optional: resize input before compression
+            actual_input = input_path
+            if _input_res:
+                import tempfile
+                _tw, _th = (int(x) for x in _input_res.lower().split("x"))
+                cap = cv2.VideoCapture(str(input_path))
+                fps_in = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                wtr = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"), fps_in, (_tw, _th))
+                while True:
+                    ok, frm = cap.read()
+                    if not ok: break
+                    wtr.write(cv2.resize(frm, (_tw, _th), interpolation=cv2.INTER_AREA))
+                cap.release(); wtr.release()
+                actual_input = Path(tmp.name)
+            archive_bytes = stage_compress(actual_input, pipeline_cfg)
+            if actual_input != input_path:
+                import os; os.unlink(actual_input)
+            if args.save_intermediate:
+                arc_path = out_dir / f"{stem}.zip"
+                arc_path.write_bytes(archive_bytes)
+                _status(f"  archive → {arc_path}")
 
-    if save_intermediate:
-        arc_path = out_dir / f"{stem}.zip"
-        with open(arc_path, "wb") as f:
-            f.write(archive_bytes)
-        _status(f"  Archive saved → {arc_path}")
+        elif stage == "decompress":
+            frames, fps, width, height, detections = stage_decompress(archive_bytes, pipeline_cfg)
+            if out_w == 0: out_w = width * 2
+            if out_h == 0: out_h = height * 2
+            if args.save_intermediate:
+                p = out_dir / f"{stem}_decompressed.mp4"
+                _save_video(frames, p, fps)
+                _status(f"  decompressed → {p}")
 
-    _status(f"  Compression done in {time.perf_counter()-t0:.1f}s "
-            f"({len(archive_bytes)/1e6:.2f} MB)")
+        elif stage == "restore":
+            frames = stage_restore(frames, fps, width, height, detections, pipeline_cfg)
+            if args.save_intermediate:
+                p = out_dir / f"{stem}_restored.mp4"
+                _save_video(frames, p, fps)
+                _status(f"  restored → {p}")
 
-    # ── Step 2: Decompress ────────────────────────────────────────────────────
-    _status("Step 2/4 — Decompressing ...")
-    t1 = time.perf_counter()
+        elif stage == "upscale-bicubic":
+            frames = stage_upscale_bicubic(frames, out_w, out_h)
 
-    decomp_cfg = _merge_sub_config(pipeline_cfg, "decompression")
-    from src.decompression.phase_decompress import decompress_archive
-    import zipfile as _zf, json as _json
-    with _zf.ZipFile(__import__('io').BytesIO(archive_bytes)) as _arc:
-        _detections = _json.loads(_arc.read("detections.json"))
-    decomp_result = decompress_archive(archive_bytes, decomp_cfg)
-    frames = decomp_result["frames"]
-    fps    = decomp_result["fps"]
-    _width  = decomp_result.get("width", 0)
-    _height = decomp_result.get("height", 0)
+        elif stage == "upscale-s3diff":
+            frames = stage_upscale_s3diff(frames, out_w, out_h, pipeline_cfg)
 
-    if save_intermediate:
-        from src.postprocessing.video_assembler import assemble_video
-        decomp_path = out_dir / f"{stem}_decompressed.mp4"
-        assemble_video(iter(frames), decomp_path, fps=fps)
-        _status(f"  Decompressed video → {decomp_path}")
+        elif stage == "upscale-wan":
+            frames = stage_upscale_wan(frames, out_w, out_h, pipeline_cfg)
 
-    _status(f"  Decompression done in {time.perf_counter()-t1:.1f}s "
-            f"({len(frames)} frames)")
-
-    # DCVC sets os.environ['CUDA_VISIBLE_DEVICES'] during encode/decode which
-    # breaks subsequent CUDA device access — reset it before restoration.
-    import os as _os
-    _os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-
-    # ── Step 3: Restore (optional) ────────────────────────────────────────────
-    restore_enabled = (
-        not args.skip_restore
-        and bool((pipeline_cfg.get("restoration", {}) or {}).get("enable", True))
-    )
-
-    if restore_enabled:
-        _status("Step 3/4 — Restoring (Model R) ...")
-        t2 = time.perf_counter()
-        restore_cfg = _merge_sub_config(pipeline_cfg, "restoration")
-        from src.restoration.phase_restore import restore_frames
-        frames = restore_frames(frames, restore_cfg,
-                                detections=_detections, width=_width, height=_height)
-
-        if save_intermediate:
-            from src.postprocessing.video_assembler import assemble_video
-            rest_path = out_dir / f"{stem}_restored.mp4"
-            assemble_video(iter(frames), rest_path, fps=fps)
-            _status(f"  Restored video → {rest_path}")
-
-        _status(f"  Restoration done in {time.perf_counter()-t2:.1f}s")
-    else:
-        _status("Step 3/4 — Restoration SKIPPED")
-
-    # ── Step 4: Upscale (optional) ────────────────────────────────────────────
-    upscale_enabled = (
-        not args.skip_upscale
-        and bool((pipeline_cfg.get("upscaling", {}) or {}).get("enable", True))
-    )
-
-    if upscale_enabled:
-        upscale_cfg = pipeline_cfg.get("upscaling", {}) or {}
-        _OUT_W, _OUT_H = 960, 720   # fixed output resolution for upscaled video
-        t3 = time.perf_counter()
-
-        if args.use_s3diff:
-            _status("Step 4/4 — Upscaling (S3Diff) ...")
-            import sys as _sys, random as _random, math as _math, subprocess as _subprocess
-            import numpy as _np
-            import torch as _torch
-            import torch.nn.functional as _F
-            from torchvision import transforms as _transforms
-            import urllib.request as _urlreq
-
-            # Option 4: override scale to 2× (4× is ~4× more compute and VRAM)
-            scale = 2
-
-            S3DIFF_DIR  = ROOT / "S3Diff"
-            weights_dir = Path(upscale_cfg.get("weights_dir", "weights"))
-            DE_NET_PATH = weights_dir / "de_net.pth"
-            S3DIFF_PATH = weights_dir / "s3diff.pkl"
-
-            def _dl(url, dest):
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                _status(f"  Downloading {dest.name} ...")
-                _urlreq.urlretrieve(url, dest)
-
-            if not S3DIFF_DIR.exists():
-                _subprocess.run(["git", "clone",
-                    "https://github.com/ArcticHare105/S3Diff.git", str(S3DIFF_DIR)], check=True)
-            if not DE_NET_PATH.exists():
-                _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/de_net.pth", DE_NET_PATH)
-            if not S3DIFF_PATH.exists():
-                _dl("https://huggingface.co/zhangap/S3Diff/resolve/main/s3diff.pkl", S3DIFF_PATH)
-
-            for _p in [str(S3DIFF_DIR / "src"), str(S3DIFF_DIR)]:
-                if _p not in _sys.path:
-                    _sys.path.insert(0, _p)
-
-            from huggingface_hub import snapshot_download as _snap_dl
-            from s3diff import S3Diff as _S3Diff
-            from de_net import DEResNet as _DEResNet
-
-            _status("  Downloading stabilityai/sd-turbo (cached after first run) ...")
-            _sd_path = _snap_dl(repo_id="stabilityai/sd-turbo")
-            _status("  Loading S3Diff ...")
-            _upscale_device = _torch.device(pipeline_cfg.get("device", "cuda"))
-            _net_sr = _S3Diff(lora_rank_unet=32, lora_rank_vae=16,
-                              sd_path=_sd_path, pretrained_path=str(S3DIFF_PATH))
-            _net_sr.set_eval()
-            _net_sr = _net_sr.cuda()
-            # DEResNet is safe to run fp16; S3Diff VAE has fp32/fp16 mixed internals
-            # so we use autocast rather than .half() on _net_sr
-            _net_de = _DEResNet(num_in_ch=3, num_degradation=2)
-            _de_ckpt = _torch.load(str(DE_NET_PATH), map_location="cpu")
-            _net_de.load_state_dict(_de_ckpt.get("state_dict", _de_ckpt))
-            _net_de.to(_upscale_device).half().eval()
-            seed = int(upscale_cfg.get("seed", 42))
-
-            def _set_seed(s):
-                _torch.manual_seed(s); _torch.cuda.manual_seed_all(s)
-                _np.random.seed(s); _random.seed(s)
-
-            def _upscale_s3diff(frame_bgr):
-                import cv2 as _cv2
-                frame_rgb = _cv2.cvtColor(frame_bgr, _cv2.COLOR_BGR2RGB)
-                im_lr = _transforms.ToTensor()(frame_rgb).unsqueeze(0).to(_upscale_device)
-                im_up = _F.interpolate(im_lr, size=(_OUT_H, _OUT_W),
-                                       mode="bilinear", align_corners=False).contiguous()
-                im_norm = (im_up * 2.0 - 1.0).clamp(-1.0, 1.0)
-                res_h, res_w = _OUT_H, _OUT_W
-                pad_h = _math.ceil(res_h / 64) * 64 - res_h
-                pad_w = _math.ceil(res_w / 64) * 64 - res_w
-                im_pad = _F.pad(im_norm, (0, pad_w, 0, pad_h), mode="reflect")
-                with _torch.no_grad(), _torch.amp.autocast("cuda"):
-                    deg = _net_de(im_lr.half()).to(device=im_pad.device)
-                    out = _net_sr(im_pad, deg.float(), prompt="a clear and high quality image")
-                out = out[:, :, :res_h, :res_w]
-                out_t = (out * 0.5 + 0.5).clamp(0, 1).cpu().float()
-                out_np = (out_t[0].permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(_np.uint8)
-                return _cv2.cvtColor(out_np, _cv2.COLOR_RGB2BGR)
-
-            upscaled = []
-            for i, frame in enumerate(frames):
-                _set_seed(seed)
-                upscaled.append(_upscale_s3diff(frame))
-                if (i + 1) % 10 == 0 or (i + 1) == len(frames):
-                    elapsed = time.perf_counter() - t3
-                    fps_up = (i + 1) / elapsed
-                    eta = (len(frames) - i - 1) / fps_up if fps_up > 0 else 0
-                    _status(f"  [upscale] {i+1}/{len(frames)} frames  {fps_up:.2f} fps  ETA {eta:.0f}s")
-            frames = upscaled
-        else:
-            _status("Step 4/4 — Upscaling (Lanczos bicubic) ...")
-            import cv2 as _cv2
-            frames = [_cv2.resize(f, (_OUT_W, _OUT_H), interpolation=_cv2.INTER_LANCZOS4)
-                      for f in frames]
-
-        _h0, _w0 = frames[0].shape[:2]
-        _status(f"  Upscaling done in {time.perf_counter()-t3:.1f}s  "
-                f"({_w0}×{_h0})")
-    else:
-        _status("Step 4/4 — Upscaling SKIPPED")
+        _status(f"  {stage} done in {time.perf_counter()-t_s:.1f}s")
 
     # ── Write final output ────────────────────────────────────────────────────
-    from src.postprocessing.video_assembler import assemble_video
-    assemble_video(iter(frames), final_out, fps=fps)
-
-    total = time.perf_counter() - t0
-    _status(f"Pipeline complete in {total:.1f}s → {final_out}")
+    _save_video(frames, final_out, fps)
+    _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s → {final_out}")
     return 0
 
 
