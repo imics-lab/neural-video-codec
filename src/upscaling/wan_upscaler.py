@@ -73,15 +73,18 @@ class WanUpscaler:
         cpu_offload         = bool(cfg.get("cpu_offload", True))
         model_id            = str(cfg.get("model_id", _DEFAULT_MODEL))
 
-        from diffusers import WanImageToVideoPipeline
+        from diffusers import WanImageToVideoPipeline, FlowMatchEulerDiscreteScheduler
         print(f"[wan] Loading {model_id} ...", flush=True)
         self.pipe = WanImageToVideoPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
         )
+        # Replace UniPC (multi-step, accumulates cached outputs → device mismatch with offload)
+        # with FlowMatchEuler which is single-step and matches Wan2.1's training objective.
+        self.pipe.scheduler = FlowMatchEulerDiscreteScheduler.from_config(
+            self.pipe.scheduler.config
+        )
         if cpu_offload:
-            # Sequential offload moves each sub-model to CPU immediately after its forward
-            # pass, keeping peak VRAM low without leaving stale tensors on the wrong device.
             self.pipe.enable_sequential_cpu_offload()
         else:
             self.pipe.to(self.device)
