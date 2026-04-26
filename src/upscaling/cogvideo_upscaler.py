@@ -86,12 +86,13 @@ class CogVideoUpscaler:
         model_id            = str(cfg.get("model_id", _DEFAULT_MODEL))
 
         from diffusers import CogVideoXVideoToVideoPipeline
-        from transformers import AutoTokenizer
+        from transformers import T5Tokenizer
+        from huggingface_hub import hf_hub_download
         print(f"[cogvideo] Loading {model_id} ...", flush=True)
-        # use_fast=False prevents tiktoken fast-conversion bug on spiece.model
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_id, subfolder="tokenizer", use_fast=False, legacy=True
-        )
+        # Load T5Tokenizer directly from the spiece.model file, bypassing
+        # the from_pretrained fast-tokenizer conversion that calls load_tiktoken_bpe
+        spiece_path = hf_hub_download(model_id, "tokenizer/spiece.model")
+        tokenizer = T5Tokenizer(vocab_file=spiece_path, model_max_length=226, legacy=True)
         self.pipe = CogVideoXVideoToVideoPipeline.from_pretrained(
             model_id,
             tokenizer=tokenizer,
