@@ -9,6 +9,7 @@ Available stages (run in the order listed):
     upscale-bicubic   Lanczos 4× bicubic resize to out_w × out_h
     upscale-s3diff    S3Diff one-step diffusion SR
     upscale-wan       Wan2.1 I2V video upscaling
+    upscale-cogvideo  CogVideoX V2V video enhancement
 
 Usage examples:
 
@@ -57,6 +58,7 @@ VALID_STAGES = [
     "upscale-bicubic",
     "upscale-s3diff",
     "upscale-wan",
+    "upscale-cogvideo",
 ]
 DEFAULT_STAGES = ["compress", "decompress", "restore", "upscale-bicubic"]
 
@@ -253,6 +255,17 @@ def stage_upscale_s3diff(frames, out_w: int, out_h: int, pipeline_cfg: dict):
     return result
 
 
+def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict):
+    _status(f"upscale-cogvideo — CogVideoX V2V → {out_w}×{out_h} ...")
+    from src.upscaling.cogvideo_upscaler import CogVideoUpscaler
+    cog_cfg = _merge_sub_config(pipeline_cfg, "cogvideo_upscaling")
+    cog_cfg.setdefault("out_w", out_w)
+    cog_cfg.setdefault("out_h", out_h)
+    cog_cfg.setdefault("device", pipeline_cfg.get("device", "cuda"))
+    upscaler = CogVideoUpscaler(cog_cfg)
+    return upscaler.upscale_sequence(frames)
+
+
 def stage_upscale_wan(frames, out_w: int, out_h: int, pipeline_cfg: dict):
     _status(f"upscale-wan — Wan2.1 I2V → {out_w}×{out_h} ...")
     from src.upscaling.wan_upscaler import WanUpscaler
@@ -385,6 +398,9 @@ def main() -> int:
 
         elif stage == "upscale-wan":
             frames = stage_upscale_wan(frames, out_w, out_h, pipeline_cfg)
+
+        elif stage == "upscale-cogvideo":
+            frames = stage_upscale_cogvideo(frames, out_w, out_h, pipeline_cfg)
 
         _status(f"  {stage} done in {time.perf_counter()-t_s:.1f}s")
 
