@@ -255,7 +255,8 @@ def stage_upscale_s3diff(frames, out_w: int, out_h: int, pipeline_cfg: dict):
     return result
 
 
-def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict):
+def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict,
+                           detections: dict = None):
     _status(f"upscale-cogvideo — CogVideoX V2V → {out_w}×{out_h} ...")
     from src.upscaling.cogvideo_upscaler import CogVideoUpscaler
     cog_cfg = _merge_sub_config(pipeline_cfg, "cogvideo_upscaling")
@@ -263,7 +264,7 @@ def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict):
     cog_cfg.setdefault("out_h", out_h)
     cog_cfg.setdefault("device", pipeline_cfg.get("device", "cuda"))
     upscaler = CogVideoUpscaler(cog_cfg)
-    return upscaler.upscale_sequence(frames)
+    return upscaler.upscale_sequence(frames, detections=detections)
 
 
 def stage_upscale_wan(frames, out_w: int, out_h: int, pipeline_cfg: dict):
@@ -400,7 +401,8 @@ def main() -> int:
             frames = stage_upscale_wan(frames, out_w, out_h, pipeline_cfg)
 
         elif stage == "upscale-cogvideo":
-            frames = stage_upscale_cogvideo(frames, out_w, out_h, pipeline_cfg)
+            frames = stage_upscale_cogvideo(frames, out_w, out_h, pipeline_cfg,
+                                            detections=detections)
 
         _status(f"  {stage} done in {time.perf_counter()-t_s:.1f}s")
 
