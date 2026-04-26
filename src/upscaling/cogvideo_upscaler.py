@@ -161,7 +161,6 @@ class CogVideoUpscaler:
             negative_prompt    = self.neg_prompt,
             height             = self.out_h,
             width              = self.out_w,
-            num_frames         = n_valid,
             strength           = self.strength,
             num_inference_steps= self.num_steps,
             guidance_scale     = self.guidance,
