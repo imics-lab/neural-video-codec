@@ -86,9 +86,13 @@ class CogVideoUpscaler:
         model_id            = str(cfg.get("model_id", _DEFAULT_MODEL))
 
         from diffusers import CogVideoXVideoToVideoPipeline
+        from transformers import T5Tokenizer
         print(f"[cogvideo] Loading {model_id} ...", flush=True)
+        # Load slow tokenizer explicitly to avoid tiktoken fast-conversion bug
+        tokenizer = T5Tokenizer.from_pretrained(model_id, subfolder="tokenizer")
         self.pipe = CogVideoXVideoToVideoPipeline.from_pretrained(
             model_id,
+            tokenizer=tokenizer,
             torch_dtype=torch.bfloat16,
         )
         if cpu_offload:
