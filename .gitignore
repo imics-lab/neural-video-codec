@@ -56,3 +56,21 @@ Thumbs.db
 *.tmp
 *.zip
 tmp/
+
+# ── Video / image files (never commit binaries to repo) ───────────────────────
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# ── Markdown reports / scratch notes ──────────────────────────────────────────
+weekly_report*.md
+requests.md
+
+# ── Misc root-level artifacts ─────────────────────────────────────────────────
+samples/
+main
