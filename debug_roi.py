@@ -56,9 +56,9 @@ def main():
         import yaml
         with open(args.config) as f:
             cfg = yaml.safe_load(f)
-        from src.detection.yolo_detector import detect_video
+        from src.detection.yolo_detector import run_detection
         print("Running detector ...", flush=True)
-        det_result = detect_video(args.video, config=cfg["detection"])
+        det_result = run_detection(args.video, config=cfg["detection"])
         detections = {str(fi): boxes for fi, boxes in det_result["frames"].items()}
         # Save for inspection
         det_out = Path(args.out).with_suffix(".detections.json")

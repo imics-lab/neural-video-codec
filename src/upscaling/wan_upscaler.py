@@ -112,14 +112,11 @@ class WanUpscaler:
         acc   = np.zeros((N, self.out_h, self.out_w, 3), dtype=np.float32)
         count = np.zeros((N,), dtype=np.float32)
 
-        cond_frame: Optional[np.ndarray] = None  # last output frame from previous chunk
-
         for ci, start in enumerate(chunk_starts):
             end    = min(start + self.chunk_frames, N)
             chunk  = frames[start:end]
             print(f"[wan] chunk {ci+1}/{len(chunk_starts)}  frames {start}–{end-1}", flush=True)
-            result = self._upscale_chunk(chunk, cond_frame)
-            cond_frame = result[-1]  # chain: next chunk conditions on this chunk's last frame
+            result = self._upscale_chunk(chunk)
 
             for li, fi in enumerate(range(start, end)):
                 # Blend with linear ramp at chunk edges for smooth transitions
@@ -141,15 +138,9 @@ class WanUpscaler:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _upscale_chunk(self, chunk: List[np.ndarray],
-                       cond_override: Optional[np.ndarray] = None) -> List[np.ndarray]:
-        """Run Wan2.1 I2V on one chunk. Returns BGR uint8 frames at (out_h, out_w).
-
-        cond_override: if provided (last frame of previous chunk output), use it as the
-        conditioning image instead of chunk[0] for temporal continuity across chunks.
-        """
-        src = cond_override if cond_override is not None else chunk[0]
-        cond_pil = _bgr_to_pil(src)
+    def _upscale_chunk(self, chunk: List[np.ndarray]) -> List[np.ndarray]:
+        """Run Wan2.1 I2V on one chunk. Returns BGR uint8 frames at (out_h, out_w)."""
+        cond_pil = _bgr_to_pil(chunk[0])
         cond_pil = cond_pil.resize((self.out_w, self.out_h), Image.LANCZOS)
 
         n_frames = len(chunk)
