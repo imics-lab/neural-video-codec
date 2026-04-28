@@ -132,7 +132,7 @@ def _parse_args() -> argparse.Namespace:
                          f"Valid: {', '.join(VALID_STAGES)}. "
                          f"Default: {' '.join(DEFAULT_STAGES)}"))
     p.add_argument("--detections", default=None,
-                   help="Path to detections JSON (auto-detected if omitted and upscale-cogvideo is used)")
+                   help="ZIP archive or JSON file containing detections for ROI overlay")
     p.add_argument("--save-intermediate", action="store_true",
                    help="Save video after each stage to output dir")
     p.add_argument("--out-w",   type=int, default=None, help="Upscale output width")
@@ -325,6 +325,18 @@ def main() -> int:
     fps    = 30.0
     width  = height = 0
     detections: dict = {}
+
+    # Load detections from --detections arg (ZIP archive or JSON file)
+    if args.detections:
+        det_path = Path(args.detections)
+        if det_path.suffix.lower() == ".zip":
+            import zipfile as _zf, io as _io
+            with _zf.ZipFile(det_path) as _arc:
+                detections = __import__("json").loads(_arc.read("detections.json"))
+        else:
+            with open(det_path) as _f:
+                detections = __import__("json").load(_f)
+        _status(f"Loaded detections from {det_path}: {len(detections)} frames")
 
     # Out dimensions for upscale stages
     _input_res = (pipeline_cfg.get("input", {}) or {}).get("input_resolution", "") or ""
