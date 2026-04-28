@@ -72,12 +72,14 @@ def _soft_mask(h: int, w: int, bboxes: List[Tuple[int, int, int, int]],
 
 def _scale_bboxes(bboxes: List, src_h: int, src_w: int,
                   dst_h: int, dst_w: int) -> List[Tuple[int, int, int, int]]:
-    """Scale bbox coordinates from src to dst resolution."""
+    """Scale bbox coordinates from src to dst resolution.
+    Accepts dicts {"x1","y1","x2","y2"} or sequences (x1,y1,x2,y2).
+    """
     sx, sy = dst_w / src_w, dst_h / src_h
     out = []
     for b in bboxes:
-        if len(b) == 4:
-            x1, y1, x2, y2 = b
+        if isinstance(b, dict):
+            x1, y1, x2, y2 = b["x1"], b["y1"], b["x2"], b["y2"]
         else:
             x1, y1, x2, y2 = b[0], b[1], b[2], b[3]
         out.append((int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)))
