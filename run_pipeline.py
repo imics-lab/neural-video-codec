@@ -131,6 +131,8 @@ def _parse_args() -> argparse.Namespace:
                    help=(f"Ordered list of stages to run. "
                          f"Valid: {', '.join(VALID_STAGES)}. "
                          f"Default: {' '.join(DEFAULT_STAGES)}"))
+    p.add_argument("--detections", default=None,
+                   help="Path to detections JSON (auto-detected if omitted and upscale-cogvideo is used)")
     p.add_argument("--save-intermediate", action="store_true",
                    help="Save video after each stage to output dir")
     p.add_argument("--out-w",   type=int, default=None, help="Upscale output width")
@@ -346,6 +348,21 @@ def main() -> int:
         if out_w == 0: out_w = w0 * 2
         if out_h == 0: out_h = h0 * 2
         _status(f"  {len(frames)} frames @ {fps:.1f} fps  {w0}×{h0}")
+
+        # Load or auto-run detections when cogvideo stage needs them
+        if "upscale-cogvideo" in stages:
+            if args.detections and Path(args.detections).exists():
+                import json as _json
+                detections = _json.loads(Path(args.detections).read_text())
+                _status(f"  loaded detections: {args.detections}")
+            else:
+                _status("  no detections provided — running detector for ROI overlay ...")
+                from src.detection.yolo_detector import run_detection
+                det_cfg = (pipeline_cfg.get("detection", {}) or {})
+                det_result = run_detection(str(input_path), config=det_cfg)
+                detections = {str(fi): boxes
+                              for fi, boxes in det_result["frames"].items()}
+                _status(f"  detected ROI in {len(detections)} frames")
 
     # ── Run stages ────────────────────────────────────────────────────────────
     for stage in stages:
