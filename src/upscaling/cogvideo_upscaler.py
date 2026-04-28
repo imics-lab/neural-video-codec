@@ -125,8 +125,6 @@ class CogVideoUpscaler:
         cpu_offload         = bool(cfg.get("cpu_offload", True))
         model_id            = str(cfg.get("model_id", _DEFAULT_MODEL))
 
-        self.roi_bg_separate = bool(cfg.get("roi_bg_separate", False))
-        self.bg_strength     = float(cfg.get("bg_strength",   0.65))
         self.roi_feather_px  = int(cfg.get("roi_feather_px",  24))
 
         from diffusers import CogVideoXVideoToVideoPipeline
@@ -158,45 +156,41 @@ class CogVideoUpscaler:
         Enhance a list of BGR uint8 frames. Returns BGR uint8 at (out_h, out_w).
 
         detections: optional dict {frame_idx: [bbox, ...]} where each bbox is
-                    (x1, y1, x2, y2) in source-frame pixel coordinates.
-                    Required when roi_bg_separate=True.
+                    {"x1","y1","x2","y2"} in source-frame pixel coordinates.
+                    When provided, original ROI regions are composited on top of
+                    the CogVideoX output to prevent hallucination in preserved areas.
         """
         if not frames:
             return []
 
-        if self.roi_bg_separate and detections:
-            return self._upscale_roi_bg(frames, detections)
-        return self._upscale_chunks(frames, self.strength)
+        enhanced = self._upscale_chunks(frames, self.strength)
 
-    # ── ROI / BG composite path ───────────────────────────────────────────────
+        if detections:
+            enhanced = self._paste_original_roi(frames, enhanced, detections)
 
-    def _upscale_roi_bg(self, frames: List[np.ndarray],
-                        detections: Dict) -> List[np.ndarray]:
-        N = len(frames)
-        src_h, src_w = frames[0].shape[:2]
+        return enhanced
 
-        print("[cogvideo] ROI/BG mode — background pass ...", flush=True)
-        bg_frames = self._upscale_chunks(frames, self.bg_strength)
+    # ── ROI overlay ───────────────────────────────────────────────────────────
 
-        # ROI: use original frames bicubic-resized (no diffusion — codec already preserved quality)
+    def _paste_original_roi(self, src_frames: List[np.ndarray],
+                            enhanced: List[np.ndarray],
+                            detections: Dict) -> List[np.ndarray]:
+        """Paste bicubic-resized original frames over CogVideoX output in ROI regions."""
+        src_h, src_w = src_frames[0].shape[:2]
         orig_resized = [cv2.resize(f, (self.out_w, self.out_h), interpolation=cv2.INTER_LANCZOS4)
-                        for f in frames]
-
-        print("[cogvideo] ROI/BG mode — compositing ...", flush=True)
+                        for f in src_frames]
         result = []
-        for fi in range(N):
+        for fi, enh in enumerate(enhanced):
             bboxes_src = detections.get(fi) or detections.get(str(fi)) or []
             if bboxes_src:
                 bboxes_out = _scale_bboxes(bboxes_src, src_h, src_w,
                                            self.out_h, self.out_w)
-                mask = _soft_mask(self.out_h, self.out_w, bboxes_out,
-                                  self.roi_feather_px)
-                bg  = bg_frames[fi].astype(np.float32)
-                roi = orig_resized[fi].astype(np.float32)
-                comp = bg * (1.0 - mask) + roi * mask
+                mask = _soft_mask(self.out_h, self.out_w, bboxes_out, self.roi_feather_px)
+                comp = (enh.astype(np.float32) * (1.0 - mask)
+                        + orig_resized[fi].astype(np.float32) * mask)
                 result.append(np.clip(comp, 0, 255).astype(np.uint8))
             else:
-                result.append(bg_frames[fi])
+                result.append(enh)
         return result
 
     # ── Chunked processing ────────────────────────────────────────────────────

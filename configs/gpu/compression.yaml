@@ -64,9 +64,7 @@ cogvideo_upscaling:
   guidance_scale: 6.0
   cpu_offload: true
   seed: 42
-  roi_bg_separate: false  # set true to process ROI and background with different strengths
-  bg_strength: 0.65       # aggressive enhancement for heavily-compressed background
-  roi_feather_px: 24      # feather pixels for soft ROI mask edges
+  roi_feather_px: 24      # feather pixels for soft ROI mask edges (original frames pasted on top)
 
 output:
   out_dir: "outputs/compression"
