@@ -124,8 +124,7 @@ class CogVideoUpscaler:
         model_id            = str(cfg.get("model_id", _DEFAULT_MODEL))
 
         self.roi_bg_separate = bool(cfg.get("roi_bg_separate", False))
-        self.bg_strength     = float(cfg.get("bg_strength",   0.35))
-        self.roi_strength    = float(cfg.get("roi_strength",  0.70))
+        self.bg_strength     = float(cfg.get("bg_strength",   0.65))
         self.roi_feather_px  = int(cfg.get("roi_feather_px",  24))
 
         from diffusers import CogVideoXVideoToVideoPipeline
@@ -177,8 +176,9 @@ class CogVideoUpscaler:
         print("[cogvideo] ROI/BG mode — background pass ...", flush=True)
         bg_frames = self._upscale_chunks(frames, self.bg_strength)
 
-        print("[cogvideo] ROI/BG mode — ROI pass ...", flush=True)
-        roi_frames = self._upscale_chunks(frames, self.roi_strength)
+        # ROI: use original frames bicubic-resized (no diffusion — codec already preserved quality)
+        orig_resized = [cv2.resize(f, (self.out_w, self.out_h), interpolation=cv2.INTER_LANCZOS4)
+                        for f in frames]
 
         print("[cogvideo] ROI/BG mode — compositing ...", flush=True)
         result = []
@@ -190,7 +190,7 @@ class CogVideoUpscaler:
                 mask = _soft_mask(self.out_h, self.out_w, bboxes_out,
                                   self.roi_feather_px)
                 bg  = bg_frames[fi].astype(np.float32)
-                roi = roi_frames[fi].astype(np.float32)
+                roi = orig_resized[fi].astype(np.float32)
                 comp = bg * (1.0 - mask) + roi * mask
                 result.append(np.clip(comp, 0, 255).astype(np.uint8))
             else:

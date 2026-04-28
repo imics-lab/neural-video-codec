@@ -66,7 +66,6 @@ cogvideo_upscaling:
   seed: 42
   roi_bg_separate: false  # set true to process ROI and background with different strengths
   bg_strength: 0.65       # aggressive enhancement for heavily-compressed background
-  roi_strength: 0.10      # minimal touch for ROI (already high-quality from codec)
   roi_feather_px: 24      # feather pixels for soft ROI mask edges
 
 output:
