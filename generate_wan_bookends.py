@@ -101,6 +101,8 @@ def generate_full_video(pipe, cond_bgr: np.ndarray, total_frames: int,
         print(f"[wan] chunk {ci+1}/{len(chunk_starts)}  frames {start}–{end-1}", flush=True)
         result  = generate_chunk(pipe, cond_bgr, out_w, out_h, n,
                                  steps, guidance, prompt, neg_prompt, seed)
+        while len(result) < n:
+            result.append(result[-1].copy())
 
         for li, fi in enumerate(range(start, end)):
             weight = 1.0
