@@ -54,9 +54,9 @@ wan_upscaling:
   seed: 42
 
 osediff_upscaling:
-  osediff_repo: "D:/OSEDiff"             # path to OSEDiff checkout (update for moon)
-  # sd21_path and osediff_path default to <osediff_repo>/models/sd21-base
-  # and <osediff_repo>/preset/models/osediff.pkl — override only if non-standard
+  # osediff_repo defaults to third_party/osediff inside this repo — no need to set it
+  # sd21_path defaults to <osediff_repo>/models/sd21-base
+  # osediff_path defaults to <osediff_repo>/preset/models/osediff.pkl
   out_w: 960
   out_h: 720
   mixed_precision: "fp16"

@@ -66,7 +66,8 @@ class OSEDiffUpscaler:
     """
 
     def __init__(self, cfg: dict) -> None:
-        repo = Path(cfg["osediff_repo"])
+        _default_repo = Path(__file__).resolve().parents[2] / "third_party" / "osediff"
+        repo = Path(cfg.get("osediff_repo", str(_default_repo)))
         if not repo.exists():
             raise FileNotFoundError(f"OSEDiff repo not found: {repo}")
 

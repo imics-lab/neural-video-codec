@@ -1,9 +1,9 @@
 CLAUDE.md
 
 # ── Large binary data (never commit) ─────────────────────────────────────────
-dataset/
-data/
-outputs/
+/dataset/
+/data/
+/outputs/
 checkpoints/
 logs/
 
