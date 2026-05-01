@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-generate_wan_bookends.py — Restore full video using Wan2.1 I2V conditioned on
-                           first frame only, and last frame only.
+generate_wan_bookends.py — Generate full video using Wan2.1 I2V autoregressively
+                           from the first frame (forward) and from the last frame
+                           (backward, then reversed).
 
-Useful for comparing what Wan2.1 "imagines" the video looks like from each endpoint.
+Each chunk is conditioned on the last frame of the previous chunk, so the
+generation flows naturally rather than resetting to the same endpoint every time.
 Both outputs match the original video length exactly.
 
 Usage:
@@ -82,10 +84,12 @@ def generate_chunk(pipe, cond_bgr: np.ndarray, out_w: int, out_h: int,
 def generate_full_video(pipe, cond_bgr: np.ndarray, total_frames: int,
                         out_w: int, out_h: int, chunk_frames: int, overlap: int,
                         steps: int, guidance: float,
-                        prompt: str, neg_prompt: str, seed: int) -> list:
+                        prompt: str, neg_prompt: str, seed: int,
+                        reverse: bool = False) -> list:
     """
-    Generate a video of total_frames length, always conditioned on the same cond_bgr.
-    Processes in overlapping chunks; blends at boundaries.
+    Generate a video of total_frames length, autoregressively conditioned:
+    each chunk is conditioned on the last frame of the previous chunk.
+    When reverse=True the sequence is flipped at the end (for from-last mode).
     """
     step         = max(1, chunk_frames - overlap)
     chunk_starts = list(range(0, total_frames, step))
@@ -95,14 +99,17 @@ def generate_full_video(pipe, cond_bgr: np.ndarray, total_frames: int,
     acc   = np.zeros((total_frames, out_h, out_w, 3), dtype=np.float32)
     count = np.zeros((total_frames,), dtype=np.float32)
 
+    cur_cond = cond_bgr
     for ci, start in enumerate(chunk_starts):
-        end     = min(start + chunk_frames, total_frames)
-        n       = end - start
+        end    = min(start + chunk_frames, total_frames)
+        n      = end - start
         print(f"[wan] chunk {ci+1}/{len(chunk_starts)}  frames {start}–{end-1}", flush=True)
-        result  = generate_chunk(pipe, cond_bgr, out_w, out_h, n,
-                                 steps, guidance, prompt, neg_prompt, seed)
+        result = generate_chunk(pipe, cur_cond, out_w, out_h, n,
+                                steps, guidance, prompt, neg_prompt, seed)
         while len(result) < n:
             result.append(result[-1].copy())
+
+        cur_cond = result[-1]   # condition next chunk on last generated frame
 
         for li, fi in enumerate(range(start, end)):
             weight = 1.0
@@ -113,8 +120,9 @@ def generate_full_video(pipe, cond_bgr: np.ndarray, total_frames: int,
             acc[fi]   += result[li].astype(np.float32) * weight
             count[fi] += weight
 
-    return [np.clip(acc[fi] / max(count[fi], 1e-6), 0, 255).astype(np.uint8)
-            for fi in range(total_frames)]
+    frames = [np.clip(acc[fi] / max(count[fi], 1e-6), 0, 255).astype(np.uint8)
+              for fi in range(total_frames)]
+    return frames[::-1] if reverse else frames
 
 
 def save_video(frames: list, path: Path, fps: float):
@@ -190,12 +198,12 @@ def main():
     # ── Load model once ───────────────────────────────────────────────────────
     pipe = load_pipe(model_id, cpu_offload)
 
-    print(f"\n[wan] Generating {total} frames from first frame ...", flush=True)
-    frames_first = generate_full_video(pipe, first_frame, **gen_kwargs)
+    print(f"\n[wan] Generating {total} frames from first frame (autoregressive forward) ...", flush=True)
+    frames_first = generate_full_video(pipe, first_frame, **gen_kwargs, reverse=False)
     save_video(frames_first, out_from_first, fps)
 
-    print(f"\n[wan] Generating {total} frames from last frame ...", flush=True)
-    frames_last = generate_full_video(pipe, last_frame, **gen_kwargs)
+    print(f"\n[wan] Generating {total} frames from last frame (autoregressive backward) ...", flush=True)
+    frames_last = generate_full_video(pipe, last_frame, **gen_kwargs, reverse=True)
     save_video(frames_last, out_from_last, fps)
 
     print("\nDone.")
