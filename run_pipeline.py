@@ -8,6 +8,7 @@ Available stages (run in the order listed):
     restore           apply RestoreUNet diffusion model
     upscale-bicubic   Lanczos 4× bicubic resize to out_w × out_h
     upscale-s3diff    S3Diff one-step diffusion SR
+    upscale-osediff   OSEDiff one-step diffusion SR (SD2.1-based)
     upscale-wan       Wan2.1 I2V video upscaling
     upscale-cogvideo  CogVideoX V2V video enhancement
 
@@ -57,6 +58,7 @@ VALID_STAGES = [
     "restore",
     "upscale-bicubic",
     "upscale-s3diff",
+    "upscale-osediff",
     "upscale-wan",
     "upscale-cogvideo",
 ]
@@ -257,6 +259,17 @@ def stage_upscale_s3diff(frames, out_w: int, out_h: int, pipeline_cfg: dict):
     return result
 
 
+def stage_upscale_osediff(frames, out_w: int, out_h: int, pipeline_cfg: dict,
+                          detections: dict = None):
+    _status(f"upscale-osediff — OSEDiff → {out_w}×{out_h} ...")
+    from src.upscaling.osediff_upscaler import OSEDiffUpscaler
+    ose_cfg = dict(pipeline_cfg.get("osediff_upscaling", {}) or {})
+    ose_cfg.setdefault("out_w", out_w)
+    ose_cfg.setdefault("out_h", out_h)
+    upscaler = OSEDiffUpscaler(ose_cfg)
+    return upscaler.upscale_sequence(frames, detections=detections)
+
+
 def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict,
                            detections: dict = None):
     _status(f"upscale-cogvideo — CogVideoX V2V → {out_w}×{out_h} ...")
@@ -411,6 +424,10 @@ def main() -> int:
 
         elif stage == "upscale-s3diff":
             frames = stage_upscale_s3diff(frames, out_w, out_h, pipeline_cfg)
+
+        elif stage == "upscale-osediff":
+            frames = stage_upscale_osediff(frames, out_w, out_h, pipeline_cfg,
+                                           detections=detections)
 
         elif stage == "upscale-wan":
             frames = stage_upscale_wan(frames, out_w, out_h, pipeline_cfg)

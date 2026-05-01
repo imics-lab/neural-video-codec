@@ -53,6 +53,22 @@ wan_upscaling:
   cpu_offload: true       # offload to CPU between ops to save VRAM
   seed: 42
 
+osediff_upscaling:
+  osediff_repo: "D:/OSEDiff"             # path to OSEDiff checkout (update for moon)
+  # sd21_path and osediff_path default to <osediff_repo>/models/sd21-base
+  # and <osediff_repo>/preset/models/osediff.pkl — override only if non-standard
+  out_w: 960
+  out_h: 720
+  mixed_precision: "fp16"
+  batch_size: 1
+  prompt: "high quality, sharp details, professional wildlife photograph, natural colors"
+  color_fix: "adain"                     # "adain", "wavelet", or "" to disable
+  seed: 42
+  vae_encoder_tiled_size: 1024
+  vae_decoder_tiled_size: 224
+  latent_tiled_size: 96
+  latent_tiled_overlap: 32
+
 cogvideo_upscaling:
   model_id: "THUDM/CogVideoX-5b"
   out_w: 720
