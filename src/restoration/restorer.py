@@ -109,17 +109,43 @@ class Restorer:
         import time as _time
         t0 = _time.perf_counter()
         processed = 0
-
+        prev_noise = None
+        correlation = 0.95
+        norm_factor = np.sqrt(correlation**2 + (1 - correlation)**2)
         for batch_start in range(0, N, batch_size):
             centres = list(range(batch_start, min(batch_start + batch_size, N)))
             B = len(centres)
 
-            # Build T-frame windows in [-1,1]
-            windows_norm = []   # (B, T, 3, H, W) in [-1,1]
+            windows_norm = []
+            x_parts = []
             for c in centres:
+                # 1. Build T-frame window
                 idxs = [max(0, min(N - 1, c + k - half)) for k in range(T)]
-                w    = torch.stack([deg_01[i] for i in idxs], dim=0)  # (T,3,H,W)
-                windows_norm.append(w * 2.0 - 1.0)
+                w = torch.stack([deg_01[i] for i in idxs], dim=0)
+                w_norm = w * 2.0 - 1.0
+                windows_norm.append(w_norm)
+
+                # 2. Sequential Noise Generation
+                # We use a unique seed per frame for the 'new' component 
+                # but blend it with the previous result.
+                gen = torch.Generator(device=self.device).manual_seed(c)
+                current_noise = torch.randn(3, H, W, device=self.device, generator=gen)
+
+                if prev_noise is not None:
+                    # Anchor the noise to the previous frame's latent state
+                    noise = (correlation * prev_noise) + ((1 - correlation) * current_noise)
+                    noise = noise / norm_factor
+                else:
+                    noise = current_noise
+                
+                prev_noise = noise # Update carry-over for frame c + 1
+
+                # 3. Apply noise to the CENTRE frame of the window
+                x_c = w_norm[half]
+                x_parts.append(ab_s.sqrt() * x_c + (1.0 - ab_s).sqrt() * noise)
+
+            # Convert parts to a batch tensor for the GPU
+            x = torch.stack(x_parts, dim=0) # (B, 3, H, W)
 
             if tile_sz > 0 and (H > tile_sz or W > tile_sz):
                 # ── Tiled path: process 256×256 patches matching training ────
@@ -189,7 +215,7 @@ class Restorer:
             ab_t    = ab[t_cur]
             ab_prev = ab[t_next]
             x0_pred = (x - (1 - ab_t).sqrt() * eps_c) / ab_t.sqrt()
-            x0_pred = x0_pred.clamp(-1.0, 2.0)
+            x0_pred = x0_pred.clamp(-1.0, 1.0)
             x       = ab_prev.sqrt() * x0_pred + (1 - ab_prev).sqrt() * eps_c
         return x
 
@@ -206,46 +232,55 @@ class Restorer:
         overlap:     int,
     ) -> torch.Tensor:
         """
-        Restore a single window by splitting into tile_sz×tile_sz tiles,
-        running DDIM on each, and blending with Gaussian weights.
+        Restore a single window by splitting into tile_sz×tile_sz tiles.
+        All tiles are batched into one _ddim_loop call instead of one call
+        per tile, reducing model forward passes from (n_tiles * ddim_steps)
+        to ddim_steps.
         Returns (3, H, W) in [0,1].
         """
         T, _, H, W = window_norm.shape
         half  = T // 2
         step  = max(tile_sz - overlap, 1)
 
-        output = torch.zeros(3, H, W, device=self.device)
-        weight = torch.zeros(1, H, W, device=self.device)
+        # ── Pass 1: collect all tiles ─────────────────────────────────────────
+        tiles_x    = []   # noised centre tile, (3, tile_sz, tile_sz)
+        tiles_cond = []   # conditioning window, (T, 3, tile_sz, tile_sz)
+        positions  = []   # (ya, y1, xa, x1) for scatter-back
 
-        tile_idx = 0
-        for y0 in range(0, H, step):
-            for x0 in range(0, W, step):
-                y1 = min(y0 + tile_sz, H); ya = max(0, y1 - tile_sz)
-                x1 = min(x0 + tile_sz, W); xa = max(0, x1 - tile_sz)
+        for tile_idx, (y0, x0) in enumerate(
+                (y, x) for y in range(0, H, step) for x in range(0, W, step)):
+            y1 = min(y0 + tile_sz, H); ya = max(0, y1 - tile_sz)
+            x1 = min(x0 + tile_sz, W); xa = max(0, x1 - tile_sz)
 
-                cond_tile  = window_norm[:, :, ya:y1, xa:x1]  # (T,3,th,tw)
-                _, _, th, tw = cond_tile.shape
-                centre_tile = cond_tile[half]                  # (3,th,tw) in [-1,1]
+            cond_tile   = window_norm[:, :, ya:y1, xa:x1]   # (T,3,ts,ts)
+            centre_tile = cond_tile[half]                    # (3,ts,ts)
 
-                # Seed noise from frame + tile index for temporal consistency
-                gen = torch.Generator(device=self.device).manual_seed(
-                    frame_seed * 10000 + tile_idx)
-                noise = torch.randn(3, th, tw, device=self.device, generator=gen)
-                x_tile = (ab_s.sqrt() * centre_tile
-                          + (1.0 - ab_s).sqrt() * noise).unsqueeze(0)  # (1,3,th,tw)
+            gen = torch.Generator(device=self.device).manual_seed(
+                frame_seed * 10000 + tile_idx)
+            noise  = torch.randn(3, tile_sz, tile_sz, device=self.device, generator=gen)
+            x_tile = ab_s.sqrt() * centre_tile + (1.0 - ab_s).sqrt() * noise
 
-                # DDIM: B=1 window
-                x_tile = self._ddim_loop(
-                    x_tile,
-                    [cond_tile],          # list of 1 tensor (T,3,th,tw)
-                    B=1, T=T, half=half,
-                    ab=ab, step_idx=step_idx, ddim_steps=ddim_steps,
-                )
-                tile_out = ((x_tile[0] + 1.0) * 0.5).clamp(0.0, 1.0)  # (3,th,tw)
+            tiles_x.append(x_tile)
+            tiles_cond.append(cond_tile)
+            positions.append((ya, y1, xa, x1))
 
-                blend = _gaussian_weight(th, tw).to(self.device)        # (th,tw)
-                output[:, ya:y1, xa:x1] += tile_out * blend
-                weight[:, ya:y1, xa:x1] += blend
-                tile_idx += 1
+        # ── Pass 2: single batched DDIM call ──────────────────────────────────
+        n_tiles = len(tiles_x)
+        x_batch = torch.stack(tiles_x, dim=0)   # (n_tiles, 3, ts, ts)
+        x_batch = self._ddim_loop(
+            x_batch, tiles_cond,
+            B=n_tiles, T=T, half=half,
+            ab=ab, step_idx=step_idx, ddim_steps=ddim_steps,
+        )
+        tiles_out = ((x_batch + 1.0) * 0.5).clamp(0.0, 1.0)  # (n_tiles, 3, ts, ts)
+
+        # ── Pass 3: scatter back with Gaussian blending ───────────────────────
+        blend_w = _gaussian_weight(tile_sz, tile_sz).to(self.device)  # (ts, ts)
+        output  = torch.zeros(3, H, W, device=self.device)
+        weight  = torch.zeros(1, H, W, device=self.device)
+
+        for i, (ya, y1, xa, x1) in enumerate(positions):
+            output[:, ya:y1, xa:x1] += tiles_out[i] * blend_w
+            weight[:, ya:y1, xa:x1] += blend_w
 
         return (output / weight.clamp(min=1e-6)).clamp(0.0, 1.0)
