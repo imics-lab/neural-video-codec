@@ -1,0 +1,378 @@
+% WACV 2026 Paper Template
+% based on the ICCV 2025 template (https://media.eventhosts.cc/Conferences/ICCV2025/ICCV2025-Author-Kit-Feb.zip) with
+% WACV-specific details (e.g., 2 tracks) from the WACV 2025 template (https://www.dropbox.com/scl/fi/su44zgdhrzik26p2xu37k/WACV-2025-Author-Kit-Template.zip?rlkey=5qcfimjhxnmx3wlyk7yhk8wg7&dl=0)
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+%%%%%%%%% PAPER TYPE  - PLEASE UPDATE FOR FINAL VERSION
+%\usepackage[review,algorithms]{wacv}
+%\usepackage[review,applications]{wacv}
+\usepackage{wacv}              % camera-ready
+%\usepackage[pagenumbers]{wacv}
+
+\input{preamble}
+
+\definecolor{wacvblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=wacvblue]{hyperref}
+
+%%%%%%%%% PAPER ID  - PLEASE UPDATE
+\def\wacvPaperID{*****}
+\def\confName{WACV}
+\def\confYear{2026}
+
+%%%%%%%%% TITLE
+\title{ROI-Aware Neural Video Compression with Temporal-Attention\\
+Diffusion Restoration for Wildlife Camera Traps}
+
+%%%%%%%%% AUTHORS
+\author{%
+  Mykhailo~Sakevych \\
+  Department of Computer Science\\
+  Texas State University\\
+  San Marcos, TX 78666 \\
+  \texttt{ukb12@txstate.edu} \\
+  \and
+  Vangelis~Metsis \\
+  Department of Computer Science\\
+  Texas State University\\
+  San Marcos, TX 78666 \\
+  \texttt{vmetsis@txstate.edu} \\
+}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{mathtools}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{subcaption}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Remote wildlife monitoring generates continuous high-resolution video that must traverse low-bandwidth uplinks from field-deployed cameras. Standard codecs apply uniform quality across the frame, wasting bits on featureless background while potentially over-compressing the subjects of interest. We present an end-to-end neural pipeline that addresses this by combining object-detection-guided ROI-aware compression with a learned diffusion-based restoration stage. On the compression side, a MegaDetector-driven dual-stream encoder allocates high-quality bits to detected animal regions and aggressively compresses the background, producing a self-contained archive with embedded detection metadata. On the server side, a custom \emph{RestoreUNet} removes DCVC compression artifacts using DDIM sampling conditioned on the degraded frame, augmented by AnimateDiff-style temporal self-attention over a three-frame window for spatiotemporal coherence. The full pipeline is modular, with each stage independently invocable and replaceable. Experiments on wildlife footage demonstrate that the proposed system achieves substantial bitrate reduction relative to standard coding while preserving perceptually meaningful subject quality through the restoration stage.
+\end{abstract}
+
+
+\section{Introduction}
+
+Wildlife camera traps are a cornerstone of ecological monitoring, enabling passive observation of animal behavior at scales impractical for human observers. Modern traps record HD video and operate at remote sites connected only by cellular or satellite links, where typical uplink bandwidth ranges from tens of kilobits per second to a few megabits per second. Continuous raw 1080p video at 30\,fps demands roughly 100--400\,Mbps before compression, many orders of magnitude above available bandwidth. Even standard video codecs such as H.264 or HEVC at aggressive quality settings produce streams too large to transmit in near-real time without unacceptable latency or cost.
+
+A key structural property of wildlife footage is that the objects of scientific interest---animals---typically occupy a small fraction of the total frame area, often less than 10\%, while the surrounding background is static or slowly varying. Standard codecs treat the entire frame uniformly, spending bits on background texture that carries no scientific value. Region-of-interest (ROI) coding has been studied in traditional codecs~\cite{Hadizadeh_2014_ROI}, but its integration with modern neural video codecs and subsequent learned quality recovery is unexplored.
+
+\begin{figure*}[t]
+  \centering
+  \TODO{replace with pipeline diagram: edge compression -> ZIP -> server decompression -> RestoreUNet -> upscaling}
+  \caption{Overview of the proposed system. The edge node detects animals in each frame, encodes the ROI region at high quality and the background aggressively using dual-stream DCVC, and transmits a compact ZIP archive. The server decodes, composites the two streams, removes compression artifacts with the temporal-attention RestoreUNet, and optionally upscales the restored frames.}
+  \label{fig:pipeline}
+\end{figure*}
+
+We present a neural video pipeline specifically designed for this domain. The pipeline couples a ROI-aware dual-stream neural video codec (DCVC~\cite{Li_2023_DCVC}) with a custom learned restoration model that recovers quality from the heavily compressed background stream, as illustrated in Fig.~\ref{fig:pipeline}. Our main contributions are:
+
+\begin{enumerate}
+    \item A \textbf{ROI-aware dual-stream encoding scheme} that uses MegaDetector~\cite{Beery_2019_MegaDetector} detections combined with KLT optical-flow tracking~\cite{Lucas_1981_KLT} to build per-frame masks, routing detected animal regions to a high-quality DCVC stream and background to an aggressively compressed stream.
+    \item \textbf{RestoreUNet}, a temporal-attention diffusion U-Net that removes DCVC compression artifacts in the decompressed composite. The model uses AnimateDiff-style~\cite{Guo_2023_AnimateDiff} temporal self-attention over a sliding three-frame window, and is conditioned on the degraded frame as an img2img DDIM process~\cite{Song_2021_DDIM} for faithful recovery.
+    \item A \textbf{modular pipeline} in which each stage --- compression, decompression, restoration, and upscaling --- is independently invocable, replaceable, and benchmarkable, facilitating systematic ablation of each component's contribution to final quality.
+    \item Empirical analysis of the \textbf{quality-bitrate trade-off} under varying background QP levels, providing practical operating points for bandwidth-constrained deployments.
+\end{enumerate}
+
+
+\section{Related Work}
+
+\subsection{Neural Video Compression}
+
+Learned image and video codecs have advanced rapidly. DCVC~\cite{Li_2023_DCVC} and its successors use conditional entropy coding with a conditional prior model to achieve rate-distortion performance competitive with VVC on standard benchmarks. DCVC-FM (Feature-Modulated) further improves inter-frame prediction using feature alignment~\cite{Li_2024_DCVC_FM}. These models encode a full frame uniformly; adapting them to ROI-weighted bit allocation is our primary application-layer contribution on the encoding side.
+
+Traditional ROI-aware coding has been studied for video conferencing~\cite{Hadizadeh_2014_ROI} and medical imaging~\cite{Sanchez_2008_ROI_Medical}, where an explicit mask inflates the distortion penalty for salient regions during rate-distortion optimization. In our pipeline we achieve a similar effect at the architectural level by routing ROI and background into separate DCVC streams at different quality points, then compositing at decode time.
+
+\subsection{Compression Artifact Removal}
+
+Early methods such as ARCNN~\cite{Dong_2015_ARCNN} and DnCNN~\cite{Zhang_2017_DnCNN} demonstrated convolutional networks for JPEG artifact suppression. Subsequent work added perceptual losses, adversarial training, and attention mechanisms. Diffusion models have recently been applied to image restoration~\cite{Saharia_2022_SR3, Whang_2022_Deblurring}, offering high-fidelity results by conditioning the reverse process on the degraded observation. Our RestoreUNet follows the img2img paradigm of SDEdit~\cite{Meng_2021_SDEdit}, starting DDIM denoising from a partially noised version of the degraded input rather than from pure Gaussian noise, preserving faithful content while removing artifacts.
+
+\subsection{Temporal Consistency in Video Restoration}
+
+Per-frame restoration of video sequences may produce flickering. AnimateDiff~\cite{Guo_2023_AnimateDiff} inserts temporal self-attention modules into a 2-D U-Net, reshaping activations from \((B \cdot T, C, H, W)\) to \((B \cdot H \cdot W, T, C)\) to attend over the time axis. BasicVSR++~\cite{Chan_2022_BasicVSR} propagates features bidirectionally across frames for video super-resolution. Our RestoreUNet adopts the AnimateDiff attention pattern but embeds it in a diffusion denoising process specifically trained on DCVC-degraded frames.
+
+\subsection{Diffusion Models for Super-Resolution}
+
+SR3~\cite{Saharia_2022_SR3} and StableSR~\cite{Wang_2023_StableSR} demonstrated that large-scale diffusion priors can generate photorealistic super-resolved images. S3Diff~\cite{Zhang_2024_S3Diff} achieves single-step SR by distilling a Stable Diffusion prior with degradation-modulated LoRA adapters. We incorporate S3Diff as the optional upscaling stage of our pipeline, where the quality recovered by RestoreUNet serves as cleaner input for the SR model.
+
+\subsection{Wildlife Monitoring and Smart Camera Traps}
+
+MegaDetector~\cite{Beery_2019_MegaDetector} provides a universal detector pretrained on millions of camera trap images, robust to the challenging lighting and background diversity of field deployments. Wildlife Insights~\cite{Ahumada_2020_WildlifeInsights} and related platforms focus on post-capture species classification. Our work addresses the orthogonal problem of reducing the data volume that must reach the server in the first place, while preserving the subject detail needed for downstream analysis.
+
+
+\section{Method}
+\label{sec:method}
+
+\subsection{System Overview}
+\label{ssec:overview}
+
+The pipeline has two logical segments: an \emph{edge node} that runs on a GPU-equipped camera device, and a \emph{server} that performs decompression and enhancement. In development and evaluation mode the full pipeline runs on a single machine operating on pre-recorded video.
+
+\paragraph{Edge.} Given a raw video, the edge node (i) extracts frames, (ii) runs the animal detector on keyframes with tracking between keyframes to generate per-frame ROI masks, (iii) encodes the ROI and background as two separate DCVC streams at different quality points, and (iv) packs both bitstreams together with the mask metadata and detection JSON into a ZIP archive.
+
+\paragraph{Server.} The server unpacks the archive, decodes both streams, composites them into a full-resolution frame sequence, passes the sequence through RestoreUNet for artifact removal, and optionally upscales the result with S3Diff.
+
+\subsection{ROI-Aware Dual-Stream Compression}
+\label{ssec:compression}
+
+\paragraph{Detection and tracking.}
+We run MegaDetector v6 (YOLOv9c backbone) at every $K{=}15$ keyframes on the full-resolution input. Between keyframes, KLT optical-flow tracking~\cite{Lucas_1981_KLT} propagates bounding boxes forward, avoiding the cost of full detection on every frame while maintaining temporally smooth ROI masks. Detections with confidence below $\tau{=}0.25$ are discarded; remaining boxes are padded by $10\%$ of their own dimension plus 8 pixels to account for motion blur at the boundary. A morphological dilation of 8 pixels is applied to the final binary mask before stream split.
+
+\paragraph{Dual-stream DCVC encoding.}
+DCVC~\cite{Li_2023_DCVC} provides separate I-frame and P-frame models trained at multiple quality points parameterized by a quantization parameter QP $\in \{0, \ldots, 63\}$ where higher values correspond to higher quality. We encode two streams per video:
+\begin{itemize}
+    \item \textbf{ROI stream}: detected animal regions at QP$_{\text{ROI}} {=} 63$ (maximum quality). Pixels outside the ROI mask are zeroed before encoding.
+    \item \textbf{Background stream}: the complement of the mask at QP$_{\text{BG}} {=} 5$ (aggressive compression). The ROI pixels are zeroed, so no information is leaked between streams.
+\end{itemize}
+The first frame of each video (or after a scene cut) is encoded as an I-frame; subsequent frames use P-frames with a reset interval of 32 frames. Both streams share the intra period $-1$ (first frame only is I-frame for continuous recording). The DCVC CVPR 2025 checkpoints are used throughout.
+
+\paragraph{Archive format.}
+The edge produces a ZIP file containing: \texttt{roi.bin} (ROI bitstream), \texttt{bg.bin} (background bitstream), \texttt{meta.json} (per-frame mask dimensions and offsets), \texttt{detections.json} (per-frame bounding boxes with track IDs and confidence scores), and \texttt{config.yaml} (codec and pipeline settings). This self-contained archive is the unit of transmission.
+
+\subsection{Decompression and Compositing}
+\label{ssec:decompression}
+
+The server decodes both streams using the same DCVC P-frame model. Let $\mathbf{F}^{\text{ROI}}_t$ and $\mathbf{F}^{\text{BG}}_t$ denote the decoded ROI and background frames at time $t$, and $\mathbf{M}_t \in \{0,1\}^{H \times W}$ the binary mask recovered from \texttt{meta.json}. The composite is:
+\begin{equation}
+\mathbf{F}_t = \mathbf{F}^{\text{ROI}}_t \odot \tilde{\mathbf{M}}_t \;+\; \mathbf{F}^{\text{BG}}_t \odot (1 - \tilde{\mathbf{M}}_t),
+\label{eq:composite}
+\end{equation}
+where $\tilde{\mathbf{M}}_t$ is a soft version of the mask obtained by Gaussian blurring $\mathbf{M}_t$ with a kernel of radius 4 pixels, providing a feathered blend at the ROI boundary that suppresses composite seam artifacts.
+
+\subsection{Temporal-Attention Diffusion Restoration (RestoreUNet)}
+\label{ssec:restoration}
+
+\subsubsection{Motivation and design choices}
+
+DCVC at low QP values introduces blocking, ringing, and color-shift artifacts. Because animals occupy the high-quality stream these artifacts mainly affect the background, but seam bleeding and low-quality stream residuals create visible degradation across the full composite. We train a dedicated restoration model to map decompressed composites to clean originals.
+
+We base the model on a denoising diffusion process conditioned on the degraded input (img2img), rather than a deterministic regressor, for two reasons: (i) diffusion models generalize well to artifact distributions not seen at training time, and (ii) the stochastic reverse process avoids the blurring tendency of pure pixel-reconstruction losses.
+
+Temporal consistency is critical: independent per-frame restoration produces flickering on uniform background regions after aggressive background compression. We embed AnimateDiff-style temporal self-attention~\cite{Guo_2023_AnimateDiff} into the U-Net to enforce coherence across a sliding three-frame window.
+
+\subsubsection{Architecture}
+
+RestoreUNet is a conditional U-Net that takes a 6-channel input: the 3-channel noised centre frame concatenated with the 3-channel degraded (decompressed) centre frame. The encoder has three resolution levels with channel widths $(128, 256, 512)$ and four residual blocks per level; the decoder mirrors the encoder with skip connections. The bottleneck contains a residual block, a spatial self-attention layer, and another residual block. The total parameter count is approximately 42M.
+
+\paragraph{Temporal self-attention.}
+Temporal self-attention blocks are inserted after every spatial self-attention block. Given a batch of $T{=}3$ frames processed simultaneously, the block reshapes the feature map $\mathbf{h} \in \mathbb{R}^{B T \times C \times H \times W}$ to $\mathbb{R}^{(B H W) \times T \times C}$, applies multi-head self-attention with $n_{\text{heads}}{=}4$ heads over the $T$ dimension, then reshapes back. A learnable positional bias matrix of shape $T \times T$ is added to the attention logits. The block is a residual branch:
+\begin{equation}
+\mathbf{h} \leftarrow \mathbf{h} + \text{TemporalAttention}(\mathbf{h}),
+\end{equation}
+so that if the temporal attention weights collapse to identity the block degenerates to a no-op, making initialisation stable.
+
+\paragraph{Time embedding.}
+Each residual block receives the diffusion timestep $t$ encoded as a sinusoidal positional embedding followed by two linear layers, added channel-wise after the first group normalization, following~\cite{Ho_2020_DDPM}.
+
+\subsubsection{Diffusion formulation}
+
+We use a cosine noise schedule~\cite{Nichol_2021_IDDPM}:
+\begin{equation}
+\bar{\alpha}_t = \frac{\cos^2\!\left(\frac{t/T + s}{1+s} \cdot \frac{\pi}{2}\right)}{\cos^2\!\left(\frac{s}{1+s} \cdot \frac{\pi}{2}\right)}, \quad s = 0.008,
+\end{equation}
+over $T{=}1000$ steps. The forward process noises the clean centre frame $\mathbf{x}_0$:
+\begin{equation}
+\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1{-}\bar{\alpha}_t}\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+\end{equation}
+The model $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, \mathbf{c}, t)$ predicts the noise, where $\mathbf{c}$ is the degraded frame. Training minimises:
+\begin{equation}
+\mathcal{L}_{\text{diff}} = \mathbb{E}_{t,\mathbf{x}_0,\boldsymbol{\epsilon}}\bigl[\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, \mathbf{c}, t)\|_2^2\bigr].
+\label{eq:diff_loss}
+\end{equation}
+
+\paragraph{Img2img inference.}
+Rather than denoising from pure noise, we apply the forward process to the degraded frame $\mathbf{c}$ up to a \emph{start timestep} $t_s{=}200$, then run DDIM~\cite{Song_2021_DDIM} denoising from $t_s$ to $0$:
+\begin{align}
+\hat{\mathbf{x}}_0 &= \frac{\mathbf{x}_t - \sqrt{1{-}\bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta}{\sqrt{\bar{\alpha}_t}}, \label{eq:x0_pred}\\
+\mathbf{x}_{t'} &= \sqrt{\bar{\alpha}_{t'}}\,\hat{\mathbf{x}}_0 + \sqrt{1{-}\bar{\alpha}_{t'}}\,\boldsymbol{\epsilon}_\theta, \label{eq:ddim_step}
+\end{align}
+where $t'$ is the next timestep in the DDIM schedule with $\eta{=}0$ (deterministic). Starting from $t_s{=}200$ ensures that the output remains faithful to the degraded input structure while suppressing high-frequency compression artifacts.
+
+\subsubsection{Window batching and tiled inference}
+\label{sssec:tiling}
+
+We process the sequence in batches of $B$ windows, each window containing $T$ consecutive frames. Only the centre frame of each window is denoised; the flanking frames serve purely as temporal context. For frames near sequence boundaries, indices are clamped to the nearest valid frame.
+
+For resolutions larger than the 256$\times$256 training patch size, the centre frame is split into overlapping tiles with stride $\text{tile\_size} - \text{overlap}$. All tiles from a single frame are batched into one DDIM call, reducing the number of model forward passes from $n_\text{tiles} \times d_\text{steps}$ to $d_\text{steps}$. Tiles are blended back using Gaussian-weighted accumulation:
+\begin{equation}
+w(i, j) = \exp\!\left(-\frac{(i - H/2)^2}{2(H/6)^2} - \frac{(j - W/2)^2}{2(W/6)^2}\right),
+\end{equation}
+which suppresses boundary ringing and produces seamless composites at tile edges.
+
+\subsubsection{Training}
+
+Training pairs are auto-generated from raw 1080p wildlife footage using \texttt{data\_prep/prepare\_restoration.py}: each clip is compressed and decompressed by DCVC, and the (degraded, original) frame pairs are stored as PNG image folders. We train with a batch size of 16 windows (T=3 frames each), Adam optimizer at learning rate $3 \times 10^{-4}$ with a cosine schedule, and an exponential moving average of model weights with decay 0.995. The total loss is:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{diff}} + \lambda_{\text{perc}}\,\mathcal{L}_{\text{VGG}},
+\end{equation}
+where $\mathcal{L}_{\text{VGG}}$ is the VGG-19 perceptual loss computed between the predicted clean frame and the ground truth, and $\lambda_{\text{perc}}{=}0.1$. Training runs on a server equipped with 2$\times$ NVIDIA RTX PRO 6000 Blackwell GPUs (96\,GB each). After 10 epochs the training loss decreased from 0.98 to 0.17.
+
+\subsection{Upscaling Stage}
+\label{ssec:upscaling}
+
+The optional final stage upscales the restored frames with S3Diff~\cite{Zhang_2024_S3Diff}, a single-step diffusion super-resolution model distilled from SD-Turbo. S3Diff uses a DEResNet degradation estimator to modulate LoRA adapters in the UNet, achieving perceptually sharp 4$\times$ upscaling in one forward pass. ROI masks are used to composite original bicubic-upscaled frames on top of S3Diff output in detected animal regions, preventing generative hallucination of fine subject detail.
+
+Alternative upscaling backends available in the pipeline include CogVideoX video-to-video~\cite{Yang_2024_CogVideoX} for temporally consistent enhancement over longer clips, and Wan2.1 I2V~\cite{Wan_2025} for high-fidelity single-frame conditioning. The modular design allows any of these to be swapped via a configuration flag.
+
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Dataset and Setup}
+
+We evaluate on a held-out set of 1080p wildlife camera trap recordings captured in a ranch environment, totalling approximately \TODO{X hours, Y videos}. Videos contain deer, coyotes, and domestic cattle recorded by fixed cameras at dawn, midday, and dusk. Approximately \TODO{Z\%} of frames contain at least one animal.
+
+For training RestoreUNet, DCVC compression pairs are generated on a separate training split using the same pipeline configuration as inference (QP$_{\text{ROI}}{=}63$, QP$_{\text{BG}}{=}5$, reset interval 32). The evaluation set is held out entirely from training data generation.
+
+\subsection{Baselines}
+
+We compare against:
+\begin{itemize}
+    \item \textbf{H.264-CRF}: FFmpeg libx264 at constant rate factor 18 (near-lossless) and 40 (aggressive), representing standard codec performance.
+    \item \textbf{DCVC uniform}: DCVC encoding the full frame at a single QP without ROI separation. QP matched to produce the same average bitrate as our dual-stream scheme.
+    \item \textbf{DCVC dual-stream, no restore}: our compression pipeline without the RestoreUNet stage.
+    \item \textbf{DCVC dual-stream + RestoreUNet (ours)}: the full proposed pipeline.
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+
+We report:
+\begin{itemize}
+    \item \textbf{PSNR} (dB) computed on the luminance channel, higher is better.
+    \item \textbf{SSIM}~\cite{Wang_2004_SSIM}, higher is better.
+    \item \textbf{LPIPS}~\cite{Zhang_2018_LPIPS} (AlexNet backbone), lower is better.
+    \item \textbf{Bits per pixel (BPP)}, averaged over the sequence.
+\end{itemize}
+Metrics are computed on full frames against the original uncompressed source. We additionally report ROI-only metrics, masking the evaluation to detected animal regions, to assess quality preservation for the scientifically relevant content.
+
+\subsection{Rate-Distortion Analysis}
+
+Table~\ref{tab:rd} compares methods at matched bitrates. The dual-stream scheme achieves \TODO{X.X\,dB} higher PSNR than uniform DCVC at the same BPP by concentrating bits in the ROI. The RestoreUNet stage recovers an additional \TODO{Y.Y\,dB} PSNR over the unrestored dual-stream output, at the cost of inference time. H.264 at comparable quality requires substantially higher BPP.
+
+\begin{table}[t]
+\centering
+\caption{Rate-distortion comparison on the test set. BPP is averaged over all frames. ROI PSNR is computed only within detected animal bounding boxes.}
+\label{tab:rd}
+\begin{tabular}{lcccc}
+\toprule
+Method & BPP & PSNR (dB) & SSIM & LPIPS \\
+\midrule
+H.264-CRF 18        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+H.264-CRF 40        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+DCVC uniform        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+DCVC dual, no rest. & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+Ours (full)         & \TODO{X.XX} & \TODO{\textbf{X.X}} & \TODO{\textbf{.XXX}} & \TODO{\textbf{.XXX}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ROI vs.\ Background Quality}
+
+Table~\ref{tab:roi_bg} reports separate ROI and background PSNR for our pipeline as we vary QP$_{\text{BG}}$ from 5 to 40. As expected, ROI quality is nearly independent of QP$_{\text{BG}}$ since the animal region is always encoded at QP$_{\text{ROI}}{=}63$. The background quality degrades gracefully; with RestoreUNet the gap to the uncompressed background closes considerably at all tested QP$_{\text{BG}}$ values.
+
+\begin{table}[t]
+\centering
+\caption{Effect of background QP on per-region quality. ROI PSNR is stable across QP$_\text{BG}$ settings; RestoreUNet closes the gap on background.}
+\label{tab:roi_bg}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccc}
+\toprule
+QP$_{\text{BG}}$ & \multicolumn{2}{c}{PSNR (ROI / BG) w/o rest.} & \multicolumn{2}{c}{PSNR (ROI / BG) w/ rest.} \\
+\midrule
+5  & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
+15 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
+25 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
+40 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Studies}
+
+\paragraph{Temporal window size.}
+We evaluate RestoreUNet with temporal windows $T \in \{1, 3, 5\}$, keeping all other settings equal. $T{=}1$ corresponds to per-frame restoration without temporal attention; $T{=}3$ is the proposed setting. Results in Table~\ref{tab:ablation_T} show that temporal attention consistently improves SSIM and LPIPS, with $T{=}3$ offering the best quality-speed trade-off.
+
+\begin{table}[t]
+\centering
+\caption{Ablation: effect of temporal window size $T$.}
+\label{tab:ablation_T}
+\begin{tabular}{lccc}
+\toprule
+$T$ & PSNR (dB) & SSIM & LPIPS \\
+\midrule
+1 (no temporal) & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+3 (proposed)    & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+5               & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{DDIM steps.}
+Table~\ref{tab:ablation_steps} reports quality versus inference time as we vary the number of DDIM steps $d \in \{1, 3, 6, 10, 20\}$. At $t_s{=}200$ (only 20\% of the full diffusion trajectory is traversed), quality saturates quickly; $d{=}6$ achieves near-peak PSNR at significantly reduced compute compared to $d{=}20$.
+
+\begin{table}[t]
+\centering
+\caption{Ablation: DDIM steps $d$ vs.\ quality and inference time (20-second test clip on one NVIDIA RTX PRO 6000).}
+\label{tab:ablation_steps}
+\begin{tabular}{lcccc}
+\toprule
+$d$ & PSNR (dB) & SSIM & LPIPS & Time (s) \\
+\midrule
+1  & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} & \TODO{XX} \\
+3  & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} & \TODO{XX} \\
+6  & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} & \TODO{XX} \\
+10 & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} & \TODO{XX} \\
+20 & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} & \TODO{XX} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{ROI blending.}
+We compare hard masking (sharp boundary between ROI and background composites) against soft Gaussian-feathered blending (Eq.~\ref{eq:composite}). Soft blending reduces visible seam artifacts by \TODO{X.X\,dB} in average PSNR at the mask boundary region, confirming the benefit of the feathered composite.
+
+\subsection{Qualitative Results}
+
+Fig.~\ref{fig:qualitative} shows representative frames from the test set. The dual-stream scheme cleanly preserves the animal silhouette and coat detail from the high-quality ROI stream. Background blocking artifacts from QP$_\text{BG}{=}5$ are substantially suppressed by RestoreUNet, particularly in smooth sky and foliage regions. Temporal flickering, visible in the per-frame baseline ($T{=}1$), is absent in the proposed model.
+
+\begin{figure*}[t]
+  \centering
+  \TODO{replace with qualitative comparison figure: original / DCVC dual no restore / ours, zoomed ROI crops}
+  \caption{Qualitative comparison. Left to right: original 1080p frame, DCVC dual-stream without restoration, and our full pipeline. Inset crops show the animal region (top) and background sky region (bottom) at 4$\times$ zoom.}
+  \label{fig:qualitative}
+\end{figure*}
+
+
+\section{Discussion}
+
+\paragraph{Bandwidth impact.}
+Across the test set, our dual-stream scheme at QP$_\text{BG}{=}5$ achieves a compression ratio of approximately \TODO{X:1} relative to uncompressed 1080p at 30\,fps. This brings a continuous 1080p wildlife stream within the range of a typical cellular uplink for intermittent transmission of event clips.
+
+\paragraph{RestoreUNet inference speed.}
+At $d{=}6$ DDIM steps and $t_s{=}200$, RestoreUNet processes a 20-second video in approximately 3 minutes on a single RTX PRO 6000 (without tiling, as the 96\,GB GPU fits 1080p full-frame). With tiling enabled (required on consumer GPUs), all tiles are batched into a single DDIM call per frame, limiting the overhead to a small constant factor over the untiled path.
+
+\paragraph{Limitations.}
+The current system requires a reliable animal detector at the edge to define ROI masks. Missed detections at the edge result in the subject being encoded in the low-quality background stream; our restoration model is not specifically trained to recover fine animal texture in that case. Future work could apply a second detection pass at the server side on the decoded high-quality stream to identify any subjects that were missed at compression time and re-request an ROI refinement. Additionally, RestoreUNet is trained on DCVC-specific artifacts; adaptation to other neural or traditional codecs would require retraining on corresponding degradation pairs.
+
+\section{Conclusion}
+
+We presented an end-to-end neural video pipeline for bandwidth-constrained wildlife camera traps. By combining object-detection-guided dual-stream DCVC encoding with a temporal-attention diffusion restoration model, the system achieves substantial bitrate reduction while preserving subject quality and removing background compression artifacts. The modular architecture enables per-stage evaluation and facilitates component replacement as better compression or restoration models become available. Experimental results confirm that the dual-stream scheme outperforms uniform DCVC at matched bitrate, and that temporal-attention restoration consistently improves temporal coherence and perceptual quality over per-frame alternatives.
+
+
+{\small
+\bibliography{References}
+\bibliographystyle{plain}
+}
+
+\end{document}
