@@ -232,9 +232,9 @@ Alternative upscaling backends available in the pipeline include CogVideoX video
 
 \subsection{Dataset and Setup}
 
-We evaluate on a held-out set of 1080p wildlife camera trap recordings captured in a ranch environment, totalling approximately \TODO{X hours, Y videos}. Videos contain deer, coyotes, and domestic cattle recorded by fixed cameras at dawn, midday, and dusk. Approximately \TODO{Z\%} of frames contain at least one animal.
+We evaluate on 36 held-out 1080p wildlife camera trap recordings captured at a ranch, spanning five animal categories: cattle, wild turkey, birds of prey (hawk, vulture), songbirds (Northern Cardinal), and empty scenes with no animals. The evaluation set totals approximately 17 minutes (30,510 frames at 30\,fps). An additional 86 short clips (${\approx}44$ minutes, predominantly cattle) were used exclusively to generate compression artifact training pairs for RestoreUNet via \texttt{data\_prep/prepare\_restoration.py}; none of these clips appear in evaluation.
 
-For training RestoreUNet, DCVC compression pairs are generated on a separate training split using the same pipeline configuration as inference (QP$_{\text{ROI}}{=}63$, QP$_{\text{BG}}{=}5$, reset interval 32). The evaluation set is held out entirely from training data generation.
+Training pairs are generated under the same codec configuration used at inference (QP$_{\text{ROI}}{=}63$, QP$_{\text{BG}}{=}5$, reset interval 32), ensuring that the restoration model sees the same artifact distribution it is evaluated on.
 
 \subsection{Baselines}
 
