@@ -137,9 +137,11 @@ def _parse_args() -> argparse.Namespace:
                    help="ZIP archive or JSON file containing detections for ROI overlay")
     p.add_argument("--save-intermediate", action="store_true",
                    help="Save video after each stage to output dir")
-    p.add_argument("--out-w",   type=int, default=None, help="Upscale output width")
-    p.add_argument("--out-h",   type=int, default=None, help="Upscale output height")
-    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--out-w",      type=int, default=None, help="Upscale output width")
+    p.add_argument("--out-h",      type=int, default=None, help="Upscale output height")
+    p.add_argument("--ddim-steps", type=int, default=None,
+                   help="Override restoration ddim_steps (e.g. 1 3 6 10 20)")
+    p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
 
 
@@ -173,10 +175,14 @@ def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
     return frames, fps, width, height, detections
 
 
-def stage_restore(frames, fps, width, height, detections, pipeline_cfg: dict):
+def stage_restore(frames, fps, width, height, detections, pipeline_cfg: dict,
+                  ddim_steps: int = None):
     """Returns restored frames list."""
     _status("restore — RestoreUNet diffusion ...")
     restore_cfg = _merge_sub_config(pipeline_cfg, "restoration")
+    if ddim_steps is not None:
+        restore_cfg.setdefault("inference", {})["ddim_steps"] = ddim_steps
+        _status(f"  ddim_steps overridden → {ddim_steps}")
     from src.restoration.phase_restore import restore_frames
     frames = restore_frames(frames, restore_cfg,
                             detections=detections, width=width, height=height)
@@ -413,7 +419,8 @@ def main() -> int:
                 _status(f"  decompressed → {p}")
 
         elif stage == "restore":
-            frames = stage_restore(frames, fps, width, height, detections, pipeline_cfg)
+            frames = stage_restore(frames, fps, width, height, detections, pipeline_cfg,
+                                   ddim_steps=args.ddim_steps)
             if args.save_intermediate:
                 p = out_dir / f"{stem}_restored.mp4"
                 _save_video(frames, p, fps)
