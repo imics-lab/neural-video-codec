@@ -16,6 +16,7 @@ inference:
   tile_overlap: 32             # overlap between tiles for Gaussian blending
   color_fix: false             # _save_samples does not apply color_fix
   batch_size: 1                # window batches processed at once
+  tile_batch_size: 4           # tiles per DDIM call; reduce if OOM (try 2 or 1)
   roi_restore_strength: 1.0    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
 
 output:

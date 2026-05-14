@@ -99,6 +99,7 @@ class Restorer:
         ddim_steps = cfg.inference.ddim_steps
         tile_sz    = int(cfg.inference.tile_size)
         tile_ov    = int(cfg.inference.tile_overlap)
+        tile_bs    = int(getattr(cfg.inference, 'tile_batch_size', 4))
 
         ab       = self.diffusion.alpha_bar.to(self.device)
         ab_s     = ab[t_start]
@@ -153,7 +154,7 @@ class Restorer:
                 for i, c in enumerate(centres):
                     restored[c] = self._restore_tiled(
                         windows_norm[i],   # (T, 3, H, W)
-                        c, ab_s, ab, step_idx, ddim_steps, tile_sz, tile_ov,
+                        c, ab_s, ab, step_idx, ddim_steps, tile_sz, tile_ov, tile_bs,
                     )
             else:
                 # ── Full-frame path ───────────────────────────────────────────
@@ -227,15 +228,14 @@ class Restorer:
         ab_s:        torch.Tensor,
         ab:          torch.Tensor,
         step_idx:    torch.Tensor,
-        ddim_steps:  int,
-        tile_sz:     int,
-        overlap:     int,
+        ddim_steps:     int,
+        tile_sz:        int,
+        overlap:        int,
+        tile_batch_size: int = 4,
     ) -> torch.Tensor:
         """
         Restore a single window by splitting into tile_sz×tile_sz tiles.
-        All tiles are batched into one _ddim_loop call instead of one call
-        per tile, reducing model forward passes from (n_tiles * ddim_steps)
-        to ddim_steps.
+        Tiles are processed in sub-batches of tile_batch_size to bound VRAM.
         Returns (3, H, W) in [0,1].
         """
         T, _, H, W = window_norm.shape
@@ -264,15 +264,19 @@ class Restorer:
             tiles_cond.append(cond_tile)
             positions.append((ya, y1, xa, x1))
 
-        # ── Pass 2: single batched DDIM call ──────────────────────────────────
+        # ── Pass 2: chunked DDIM calls ────────────────────────────────────────
         n_tiles = len(tiles_x)
-        x_batch = torch.stack(tiles_x, dim=0)   # (n_tiles, 3, ts, ts)
-        x_batch = self._ddim_loop(
-            x_batch, tiles_cond,
-            B=n_tiles, T=T, half=half,
-            ab=ab, step_idx=step_idx, ddim_steps=ddim_steps,
-        )
-        tiles_out = ((x_batch + 1.0) * 0.5).clamp(0.0, 1.0)  # (n_tiles, 3, ts, ts)
+        chunks_out = []
+        for start in range(0, n_tiles, tile_batch_size):
+            end = min(start + tile_batch_size, n_tiles)
+            x_chunk = torch.stack(tiles_x[start:end], dim=0)
+            out = self._ddim_loop(
+                x_chunk, tiles_cond[start:end],
+                B=end - start, T=T, half=half,
+                ab=ab, step_idx=step_idx, ddim_steps=ddim_steps,
+            )
+            chunks_out.append(out)
+        tiles_out = ((torch.cat(chunks_out, dim=0) + 1.0) * 0.5).clamp(0.0, 1.0)
 
         # ── Pass 3: scatter back with Gaussian blending ───────────────────────
         blend_w = _gaussian_weight(tile_sz, tile_sz).to(self.device)  # (ts, ts)
