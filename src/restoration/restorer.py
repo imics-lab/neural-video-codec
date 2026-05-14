@@ -91,7 +91,7 @@ class Restorer:
         half = T // 2
         cfg  = self.cfg
 
-        deg_01 = [_to_tensor(f).to(self.device) for f in degraded_frames]
+        deg_01 = [_to_tensor(f) for f in degraded_frames]  # keep on CPU
 
         _, H, W    = deg_01[0].shape
         batch_size = int(getattr(cfg.inference, 'batch_size', 1))
@@ -122,7 +122,7 @@ class Restorer:
             for c in centres:
                 # 1. Build T-frame window
                 idxs = [max(0, min(N - 1, c + k - half)) for k in range(T)]
-                w = torch.stack([deg_01[i] for i in idxs], dim=0)
+                w = torch.stack([deg_01[i] for i in idxs], dim=0).to(self.device)
                 w_norm = w * 2.0 - 1.0
                 windows_norm.append(w_norm)
 
