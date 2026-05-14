@@ -15,7 +15,7 @@ inference:
   tile_size: 256               # process as 256×256 tiles matching training patch size
   tile_overlap: 32             # overlap between tiles for Gaussian blending
   color_fix: false             # _save_samples does not apply color_fix
-  batch_size: 4                # window batches processed at once
+  batch_size: 1                # window batches processed at once
   roi_restore_strength: 1.0    # 0=keep decompressed ROI, 1=fully restore ROI (BG always 1.0)
 
 output:
