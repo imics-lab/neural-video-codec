@@ -375,6 +375,7 @@ def train(args: argparse.Namespace) -> None:
 
     # Dataset
     T_win = args.temporal_window or cfg.get("temporal_window", 3)
+    cfg["temporal_window"] = T_win  # propagate to _build_model
     patch_size = args.patch_size or cfg.get("training", {}).get("patch_size", 256)
     full_ds    = RestorationDataset(
         Path(args.data), T=T_win, patch_size=patch_size, augment=True
