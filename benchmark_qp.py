@@ -66,9 +66,11 @@ def _run_single(
     import copy
     run_cfg = copy.deepcopy(cfg)
 
-    # Override QPs
-    _deep_set(run_cfg, ["compression", "quality", "roi_qp"], roi_qp)
-    _deep_set(run_cfg, ["compression", "quality", "bg_qp"],  bg_qp)
+    # Override QPs (config uses separate _i/_p keys for I- and P-frames)
+    for key in ("roi_qp_i", "roi_qp_p"):
+        _deep_set(run_cfg, ["compression", "quality", key], roi_qp)
+    for key in ("bg_qp_i", "bg_qp_p"):
+        _deep_set(run_cfg, ["compression", "quality", key], bg_qp)
 
     from src.compression.phase_compress import compress_video
     from src.decompression.phase_decompress import decompress_archive
