@@ -324,17 +324,17 @@ Table~\ref{tab:ablation_steps} reports quality versus inference time as we vary 
 
 \begin{table}[t]
 \centering
-\caption{Ablation: DDIM steps $d$ vs.\ quality and inference time (20-second test clip on one NVIDIA RTX PRO 6000).}
+\caption{Ablation: DDIM steps $d$ vs.\ quality and per-frame inference time (1280$\times$720, NVIDIA A5000 24\,GB). Tiling chunk overhead dominates latency, so step count has negligible throughput impact.}
 \label{tab:ablation_steps}
 \begin{tabular}{lcccc}
 \toprule
-$d$ & PSNR (dB) & SSIM & LPIPS & Time (s) \\
+$d$ & PSNR (dB) & SSIM & LPIPS & ms/frame \\
 \midrule
-1  & 28.60 & 0.8237 & 0.3329 & \TODO{XX} \\
-3  & \textbf{28.61} & 0.8221 & \textbf{0.3306} & \TODO{XX} \\
-6  & 28.55 & 0.8179 & 0.3349 & \TODO{XX} \\
-10 & 28.52 & 0.8153 & 0.3377 & \TODO{XX} \\
-20 & 28.49 & 0.8129 & 0.3405 & \TODO{XX} \\
+1  & 28.60 & 0.8237 & 0.3329 & 120 \\
+3  & \textbf{28.61} & 0.8221 & \textbf{0.3306} & 119 \\
+6  & 28.55 & 0.8179 & 0.3349 & 113 \\
+10 & 28.52 & 0.8153 & 0.3377 & 114 \\
+20 & 28.49 & 0.8129 & 0.3405 & 127 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -360,7 +360,7 @@ Fig.~\ref{fig:qualitative} shows representative frames from the test set. The du
 Across the test set, our dual-stream scheme at QP$_\text{BG}{=}5$ achieves a compression ratio of approximately \TODO{X:1} relative to uncompressed 1080p at 30\,fps. This brings a continuous 1080p wildlife stream within the range of a typical cellular uplink for intermittent transmission of event clips.
 
 \paragraph{RestoreUNet inference speed.}
-At $d{=}6$ DDIM steps and $t_s{=}200$, RestoreUNet processes a 20-second video in approximately 3 minutes on a single RTX PRO 6000 (without tiling, as the 96\,GB GPU fits 1080p full-frame). With tiling enabled (required on consumer GPUs), all tiles are batched into a single DDIM call per frame, limiting the overhead to a small constant factor over the untiled path.
+At $d{=}3$ DDIM steps and $t_s{=}200$, RestoreUNet processes 1280$\times$720 frames at approximately 119\,ms/frame on a single NVIDIA A5000 (24\,GB) with tiling enabled (tile size 256, overlap 32, tile batch 4). Because tiling chunk overhead dominates over per-step compute, throughput is nearly independent of step count across the range $d \in \{1,\ldots,20\}$.
 
 \paragraph{Limitations.}
 The current system requires a reliable animal detector at the edge to define ROI masks. Missed detections at the edge result in the subject being encoded in the low-quality background stream; our restoration model is not specifically trained to recover fine animal texture in that case. Future work could apply a second detection pass at the server side on the decoded high-quality stream to identify any subjects that were missed at compression time and re-request an ROI refinement. Additionally, RestoreUNet is trained on DCVC-specific artifacts; adaptation to other neural or traditional codecs would require retraining on corresponding degradation pairs.
