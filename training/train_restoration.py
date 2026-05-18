@@ -374,7 +374,7 @@ def train(args: argparse.Namespace) -> None:
     LOGGER.info(f"Device: {device}")
 
     # Dataset
-    T_win      = cfg.get("temporal_window", 3)
+    T_win = args.temporal_window or cfg.get("temporal_window", 3)
     patch_size = args.patch_size or cfg.get("training", {}).get("patch_size", 256)
     full_ds    = RestorationDataset(
         Path(args.data), T=T_win, patch_size=patch_size, augment=True
@@ -613,6 +613,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Number of validation samples to visualize")
     p.add_argument("--steps-per-epoch", type=int, default=None,
                    help="Cap steps per epoch regardless of dataset size")
+    p.add_argument("--temporal-window", type=int, default=None,
+                   help="Override temporal window size T (e.g. 1 3 5)")
     p.add_argument("--verbose",        action="store_true")
     return p.parse_args()
 
