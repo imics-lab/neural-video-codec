@@ -280,21 +280,21 @@ Ours (full)         & \TODO{X.XX} & \TODO{\textbf{X.X}} & \TODO{\textbf{.XXX}} &
 
 \subsection{ROI vs.\ Background Quality}
 
-Table~\ref{tab:roi_bg} reports separate ROI and background PSNR for our pipeline as we vary QP$_{\text{BG}}$ from 5 to 40. As expected, ROI quality is nearly independent of QP$_{\text{BG}}$ since the animal region is always encoded at QP$_{\text{ROI}}{=}63$. The background quality degrades gracefully; with RestoreUNet the gap to the uncompressed background closes considerably at all tested QP$_{\text{BG}}$ values.
+Table~\ref{tab:roi_bg} reports overall quality as we vary QP$_{\text{BG}}$ from 5 to 40 while holding QP$_{\text{ROI}}{=}63$ fixed. Because the animal region is always encoded at maximum quality, the dominant driver of overall distortion is the background rate. Reducing QP$_{\text{BG}}$ from 40 to 5 saves approximately 17\% of archive size at a cost of 4.6\,dB PSNR, representing a practical operating range for bandwidth-constrained deployments.
 
 \begin{table}[t]
 \centering
-\caption{Effect of background QP on per-region quality. ROI PSNR is stable across QP$_\text{BG}$ settings; RestoreUNet closes the gap on background.}
+\caption{Effect of background QP on overall quality (QP$_{\text{ROI}}{=}63$ throughout). Archive size and metrics measured on a representative 1280$\times$720 clip.}
 \label{tab:roi_bg}
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{5pt}
 \begin{tabular}{lcccc}
 \toprule
-QP$_{\text{BG}}$ & \multicolumn{2}{c}{PSNR (ROI / BG) w/o rest.} & \multicolumn{2}{c}{PSNR (ROI / BG) w/ rest.} \\
+QP$_{\text{BG}}$ & Archive (KB) & PSNR (dB) & SSIM & LPIPS \\
 \midrule
-5  & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
-15 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
-25 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
-40 & \TODO{XX.X} / \TODO{XX.X} & & \TODO{XX.X} / \TODO{XX.X} & \\
+5  & 10550 & 31.25 & 0.8599 & 0.2918 \\
+15 & 10865 & 33.20 & 0.9053 & 0.2416 \\
+25 & 11360 & 34.63 & 0.9315 & 0.2029 \\
+40 & 12711 & \textbf{35.86} & \textbf{0.9484} & \textbf{0.1678} \\
 \bottomrule
 \end{tabular}
 \end{table}
