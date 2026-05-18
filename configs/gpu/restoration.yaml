@@ -10,7 +10,7 @@ model:
   n_heads: 4                   # temporal attention heads
 
 inference:
-  ddim_steps: 6                # denoising steps (1 = fast, 50 = quality); 6 is enough at t_start=200
+  ddim_steps: 3                # denoising steps; quality peaks at d=3 with t_start=200
   t_start: 200                 # img2img start timestep; lower = more faithful to input
   tile_size: 256               # process as 256×256 tiles matching training patch size
   tile_overlap: 32             # overlap between tiles for Gaussian blending
