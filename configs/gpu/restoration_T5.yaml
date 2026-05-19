@@ -1,0 +1,23 @@
+device: "cuda:0"
+
+model:
+  checkpoint: "checkpoints/restore_T5/best.pt"
+  base_channels: 64
+  encoder_channels: [128, 256, 512]
+  num_res_blocks: 4
+  timesteps: 1000
+  temporal_window: 5
+  n_heads: 4
+
+inference:
+  ddim_steps: 3
+  t_start: 200
+  tile_size: 256
+  tile_overlap: 32
+  color_fix: false
+  batch_size: 1
+  tile_batch_size: 4
+  roi_restore_strength: 1.0
+
+output:
+  out_dir: "outputs/restoration"

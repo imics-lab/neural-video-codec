@@ -141,6 +141,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--out-h",      type=int, default=None, help="Upscale output height")
     p.add_argument("--ddim-steps", type=int, default=None,
                    help="Override restoration ddim_steps (e.g. 1 3 6 10 20)")
+    p.add_argument("--restore-config", default=None,
+                   help="Override restoration sub-config path (e.g. configs/gpu/restoration_T1.yaml)")
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
 
@@ -176,9 +178,14 @@ def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
 
 
 def stage_restore(frames, fps, width, height, detections, pipeline_cfg: dict,
-                  ddim_steps: int = None):
+                  ddim_steps: int = None, restore_config: str = None):
     """Returns restored frames list."""
     _status("restore — RestoreUNet diffusion ...")
+    if restore_config is not None:
+        import copy
+        pipeline_cfg = copy.deepcopy(pipeline_cfg)
+        pipeline_cfg.setdefault("restoration", {})["config"] = restore_config
+        _status(f"  restore config overridden → {restore_config}")
     restore_cfg = _merge_sub_config(pipeline_cfg, "restoration")
     if ddim_steps is not None:
         restore_cfg.setdefault("inference", {})["ddim_steps"] = ddim_steps
@@ -420,7 +427,8 @@ def main() -> int:
 
         elif stage == "restore":
             frames = stage_restore(frames, fps, width, height, detections, pipeline_cfg,
-                                   ddim_steps=args.ddim_steps)
+                                   ddim_steps=args.ddim_steps,
+                                   restore_config=args.restore_config)
             if args.save_intermediate:
                 p = out_dir / f"{stem}_restored.mp4"
                 _save_video(frames, p, fps)
