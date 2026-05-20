@@ -302,19 +302,19 @@ QP$_{\text{BG}}$ & Archive (KB) & PSNR (dB) & SSIM & LPIPS \\
 \subsection{Ablation Studies}
 
 \paragraph{Temporal window size.}
-We evaluate RestoreUNet with temporal windows $T \in \{1, 3, 5\}$, keeping all other settings equal. $T{=}1$ reduces to per-frame restoration with no temporal attention; $T{=}3$ is the proposed setting. Because PSNR, SSIM, and LPIPS are computed independently on each output frame, they are insensitive to $T$ by construction; the numbers in Table~\ref{tab:ablation_T} are within measurement noise across all three settings. The benefit of temporal attention is flicker suppression and cross-frame coherence, which require video-level viewing to assess. We select $T{=}3$ as the default: it provides temporal context without the additional memory and compute cost of $T{=}5$.
+We evaluate RestoreUNet with temporal windows $T \in \{1, 3, 5\}$, keeping all other settings equal. $T{=}1$ reduces to per-frame restoration with no temporal attention; $T{=}3$ is the proposed setting. Because PSNR, SSIM, and LPIPS are computed independently per frame, they are insensitive to $T$ by construction; the values in Table~\ref{tab:ablation_T} are within measurement noise across all three settings. To measure temporal coherence directly, we report motion-compensated warping error: Farneback optical flow is estimated between consecutive output frames, frame $t$ is warped to frame $t{+}1$, and the MSE between the warp and the actual frame $t{+}1$ is averaged over all pairs. A lower warping error indicates less inter-frame flickering independent of scene motion. $T{=}3$ achieves the lowest warping error (1.87 vs.\ 2.47 for $T{=}1$), confirming that temporal attention suppresses restoration flicker. $T{=}5$ partially recovers consistency but does not match $T{=}3$, so we retain $T{=}3$ as the default.
 
 \begin{table}[t]
 \centering
-\caption{Ablation: effect of temporal window size $T$. Per-frame metrics are insensitive to $T$ by construction; differences are within measurement noise.}
+\caption{Ablation: effect of temporal window size $T$. Per-frame metrics (PSNR, SSIM, LPIPS) are insensitive to $T$; warping error measures temporal consistency directly ($\downarrow$ better).}
 \label{tab:ablation_T}
-\begin{tabular}{lccc}
+\begin{tabular}{lcccc}
 \toprule
-$T$ & PSNR (dB) & SSIM & LPIPS \\
+$T$ & PSNR (dB) & SSIM & LPIPS & WE ($\times10^{-4}$) \\
 \midrule
-1 (no temporal) & 28.79 & 0.8338 & 0.3116 \\
-3 (proposed)    & 28.83 & 0.8314 & 0.3234 \\
-5               & 28.73 & 0.8301 & 0.3235 \\
+1 (no temporal) & 28.79 & 0.8338 & 0.3116 & 2.47 \\
+3 (proposed)    & 28.83 & 0.8314 & 0.3234 & \textbf{1.87} \\
+5               & 28.73 & 0.8301 & 0.3235 & 2.32 \\
 \bottomrule
 \end{tabular}
 \end{table}
