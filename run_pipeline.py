@@ -238,7 +238,8 @@ def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
             [sys.executable, str(ROOT / "run_decompression.py"),
              archive_path,           # positional argument
              "--config",  dec_cfg_path,
-             "--output",  out_path],
+             "--output",  out_path,
+             "--no-interpolate"],    # AMT model not required; restore stage handles quality
             check=True,
         )
         cap = cv2.VideoCapture(out_path)
