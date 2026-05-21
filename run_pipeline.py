@@ -236,7 +236,7 @@ def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
     try:
         subprocess.run(
             [sys.executable, str(ROOT / "run_decompression.py"),
-             "--archive", archive_path,
+             archive_path,           # positional argument
              "--config",  dec_cfg_path,
              "--output",  out_path],
             check=True,
