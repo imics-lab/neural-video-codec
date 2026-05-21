@@ -77,6 +77,9 @@ compression:
     bg_qp_i: 25
     bg_qp_p: 25
 
+restoration:
+  config: "configs/gpu/restoration.yaml"
+
 output:
   write_outputs: true
   # Empty string keeps archive next to input video.
