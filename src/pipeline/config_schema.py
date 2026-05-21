@@ -1,188 +1,309 @@
-"""
-Config validation for all pipeline stages.
-
-Each validate_* function accepts a plain dict and raises ValueError listing all
-problems found.  This mirrors the reference project's approach so errors surface
-early and clearly.
-"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _as_dict(v: Any, name: str, errors: List[str]) -> Dict[str, Any]:
+def _as_dict(v: Any, name: str, errors: list[str]) -> Dict[str, Any]:
     if not isinstance(v, dict):
-        errors.append(f"{name} must be an object/dict")
+        errors.append(f"{name} must be an object")
         return {}
     return v
 
 
-def _check_range(v: Any, name: str, errors: List[str],
-                 lo: Optional[float] = None, hi: Optional[float] = None) -> None:
+def _ensure_type(v: Any, expected: type | tuple[type, ...], name: str, errors: list[str]) -> None:
+    if not isinstance(v, expected):
+        errors.append(f"{name} must be of type {expected}, got {type(v)}")
+
+
+def _ensure_number_range(v: Any, name: str, errors: list[str], min_v: Optional[float] = None, max_v: Optional[float] = None) -> None:
     if not isinstance(v, (int, float)):
         errors.append(f"{name} must be a number")
         return
-    if lo is not None and float(v) < lo:
-        errors.append(f"{name} must be >= {lo}, got {v}")
-    if hi is not None and float(v) > hi:
-        errors.append(f"{name} must be <= {hi}, got {v}")
+    fv = float(v)
+    if min_v is not None and fv < min_v:
+        errors.append(f"{name} must be >= {min_v}, got {fv}")
+    if max_v is not None and fv > max_v:
+        errors.append(f"{name} must be <= {max_v}, got {fv}")
 
 
-def _must_exist(path_str: str, field: str, root: Path, errors: List[str]) -> None:
-    p = Path(path_str).expanduser()
-    if not p.is_absolute():
-        p = (root / p).resolve()
-    if not p.exists():
-        errors.append(f"{field} does not exist: {p}")
+def _resolve_path(path_value: str, root_dir: Path) -> Path:
+    p = Path(path_value).expanduser()
+    if p.is_absolute():
+        return p
+    return (root_dir / p).resolve()
 
 
-def _check_device(val: Any, name: str, errors: List[str]) -> None:
-    if isinstance(val, bool):
-        errors.append(f"{name}: use a string like 'cuda' or 'cuda:0', not a bool")
-    elif isinstance(val, int):
-        if val < 0:
-            errors.append(f"{name} integer index must be >= 0")
-    elif isinstance(val, str):
-        s = val.strip().lower()
-        if s in {"cpu", "mps"}:
-            errors.append(f"{name}: CPU/MPS not supported in GPU runtime")
-        elif not (s in {"auto", "cuda"} or s.isdigit()
-                  or (s.startswith("cuda:") and s.split(":", 1)[1].isdigit())):
-            errors.append(f"{name} must be 'auto', 'cuda', 'cuda:<N>', or integer index")
-    else:
-        errors.append(f"{name} must be a string or integer")
+def _must_exist(path_value: str, field_name: str, root_dir: Path, errors: list[str]) -> None:
+    path = _resolve_path(path_value, root_dir)
+    if not path.exists():
+        errors.append(f"{field_name} does not exist: {path}")
 
 
-# ── Compression config ────────────────────────────────────────────────────────
+def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = None, root_dir: Optional[Path] = None) -> None:
+    """
+    Validate runtime-critical config fields. Raises ValueError on any issue.
+    """
+    errors: list[str] = []
+    if not isinstance(cfg, dict):
+        raise TypeError("Config root must be an object")
 
-def validate_compression_config(cfg: Dict[str, Any], root_dir: Optional[Path] = None) -> None:
-    errors: List[str] = []
     root = (root_dir or Path.cwd()).resolve()
 
-    det = _as_dict(cfg.get("detection", {}), "detection", errors)
-    if not det.get("model_path"):
-        errors.append("detection.model_path is required")
-    elif isinstance(det["model_path"], str):
-        _must_exist(det["model_path"], "detection.model_path", root, errors)
+    input_cfg = _as_dict(cfg.get("input", {}), "input", errors)
+    roi_cfg = _as_dict(cfg.get("roi_detection", {}), "roi_detection", errors)
+    frame_cfg = _as_dict(cfg.get("frame_removal", {}), "frame_removal", errors)
+    comp_cfg = _as_dict(cfg.get("compression", {}), "compression", errors)
+    out_cfg = _as_dict(cfg.get("output", {}), "output", errors)
 
-    if "conf" in det:
-        _check_range(det["conf"], "detection.conf", errors, 0.0, 1.0)
-    if "iou_nms" in det:
-        _check_range(det["iou_nms"], "detection.iou_nms", errors, 0.0, 1.0)
-    if "processing_scale" in det:
-        _check_range(det["processing_scale"], "detection.processing_scale", errors, 0.1, 1.0)
+    # input
+    cfg_video = input_cfg.get("video_path")
+    if video_path is None and not cfg_video:
+        errors.append("video_path is required: pass a CLI video path or set input.video_path in a custom config")
+    chosen_video = str(video_path) if video_path else str(cfg_video)
+    if chosen_video:
+        _must_exist(chosen_video, "video_path", root, errors)
 
-    comp = _as_dict(cfg.get("compression", {}), "compression", errors)
-    dcvc = _as_dict(comp.get("dcvc", {}), "compression.dcvc", errors)
-    qual = _as_dict(comp.get("quality", {}), "compression.quality", errors)
+    # roi_detection
+    paths_cfg = _as_dict(roi_cfg.get("paths", {}), "roi_detection.paths", errors)
+    runtime_cfg = _as_dict(roi_cfg.get("runtime", {}), "roi_detection.runtime", errors)
+    tracking_cfg = _as_dict(roi_cfg.get("tracking", {}), "roi_detection.tracking", errors)
+
+    roi_enabled = bool(roi_cfg.get("enable", True))
+    model_path = paths_cfg.get("animal_model_path")
+    onnx_model_path = paths_cfg.get("animal_model_path_onnx")
+    if roi_enabled:
+        if not model_path:
+            errors.append("roi_detection.paths.animal_model_path is required when roi_detection.enable=true")
+        else:
+            _must_exist(str(model_path), "roi_detection.paths.animal_model_path", root, errors)
+    if onnx_model_path:
+        _must_exist(str(onnx_model_path), "roi_detection.paths.animal_model_path_onnx", root, errors)
+
+    if "processing_scale" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["processing_scale"], "roi_detection.runtime.processing_scale", errors, 0.1, 1.0)
+    if "imgsz" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["imgsz"], "roi_detection.runtime.imgsz", errors, 64, None)
+    if "conf" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["conf"], "roi_detection.runtime.conf", errors, 0.0, 1.0)
+    if "iou_nms" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["iou_nms"], "roi_detection.runtime.iou_nms", errors, 0.0, 1.0)
+    if "bbox_pad_frac" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["bbox_pad_frac"], "roi_detection.runtime.bbox_pad_frac", errors, 0.0, None)
+    if "bbox_pad_px" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["bbox_pad_px"], "roi_detection.runtime.bbox_pad_px", errors, 0.0, None)
+    if "keyframe_interval" in runtime_cfg:
+        _ensure_number_range(runtime_cfg["keyframe_interval"], "roi_detection.runtime.keyframe_interval", errors, 1, None)
+    if "device" in runtime_cfg:
+        dev = runtime_cfg.get("device")
+        if isinstance(dev, bool):
+            errors.append(
+                "roi_detection.runtime.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+            )
+        elif isinstance(dev, int):
+            if int(dev) < 0:
+                errors.append("roi_detection.runtime.device integer index must be >= 0")
+        elif isinstance(dev, str):
+            s = dev.strip().lower()
+            if s in {"cpu", "mps"}:
+                errors.append("Strict GPU runtime forbids roi_detection.runtime.device set to CPU/MPS")
+            valid = (
+                s in {"auto", "cuda"}
+                or s.isdigit()
+                or (s.startswith("cuda:") and s.split(":", 1)[1].strip().isdigit())
+            )
+            if not valid:
+                errors.append(
+                    "roi_detection.runtime.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+                )
+        else:
+            errors.append(
+                "roi_detection.runtime.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+            )
+    if "prefer_onnx" in runtime_cfg:
+        _ensure_type(runtime_cfg["prefer_onnx"], bool, "roi_detection.runtime.prefer_onnx", errors)
+    if "prefer_onnx_strict" in runtime_cfg:
+        _ensure_type(runtime_cfg["prefer_onnx_strict"], bool, "roi_detection.runtime.prefer_onnx_strict", errors)
+    if bool(runtime_cfg.get("prefer_onnx_strict", False)) and not bool(runtime_cfg.get("prefer_onnx", False)):
+        errors.append("roi_detection.runtime.prefer_onnx_strict=true requires roi_detection.runtime.prefer_onnx=true")
+    if bool(runtime_cfg.get("prefer_onnx", False)):
+        if not onnx_model_path:
+            errors.append(
+                "roi_detection.runtime.prefer_onnx=true requires roi_detection.paths.animal_model_path_onnx"
+            )
+        elif roi_enabled:
+            _must_exist(str(onnx_model_path), "roi_detection.paths.animal_model_path_onnx", root, errors)
+
+    if "match_iou" in tracking_cfg:
+        _ensure_number_range(tracking_cfg["match_iou"], "roi_detection.tracking.match_iou", errors, 0.0, 1.0)
+    if "min_hits" in tracking_cfg:
+        _ensure_number_range(tracking_cfg["min_hits"], "roi_detection.tracking.min_hits", errors, 1, None)
+    if "enable_propagation" in tracking_cfg:
+        _ensure_type(tracking_cfg["enable_propagation"], bool, "roi_detection.tracking.enable_propagation", errors)
+
+    # frame_removal
+    params_cfg = _as_dict(frame_cfg.get("params", {}), "frame_removal.params", errors)
+    frame_roi_cfg = _as_dict(params_cfg.get("roi", {}), "frame_removal.params.roi", errors)
+    motion_cfg = _as_dict(params_cfg.get("motion", {}), "frame_removal.params.motion", errors)
+    smooth_cfg = _as_dict(params_cfg.get("bbox_smoothing", {}), "frame_removal.params.bbox_smoothing", errors)
+    dual_cfg = _as_dict(frame_cfg.get("dual_timeline", {}), "frame_removal.dual_timeline", errors)
+
+    if "halo_frac" in frame_roi_cfg:
+        _ensure_number_range(
+            frame_roi_cfg["halo_frac"],
+            "frame_removal.params.roi.halo_frac",
+            errors,
+            0.0,
+            None,
+        )
+    if "fixed_size" in frame_roi_cfg:
+        _ensure_number_range(
+            frame_roi_cfg["fixed_size"],
+            "frame_removal.params.roi.fixed_size",
+            errors,
+            1,
+            None,
+        )
+    if "blur_ksize" in frame_roi_cfg:
+        _ensure_number_range(
+            frame_roi_cfg["blur_ksize"],
+            "frame_removal.params.roi.blur_ksize",
+            errors,
+            0,
+            None,
+        )
+    if "gray" in frame_roi_cfg:
+        _ensure_type(frame_roi_cfg["gray"], bool, "frame_removal.params.roi.gray", errors)
+
+    t_low = motion_cfg.get("t_low")
+    t_high = motion_cfg.get("t_high")
+    if t_low is not None:
+        _ensure_number_range(t_low, "frame_removal.params.motion.t_low", errors, 0.0, None)
+    if t_high is not None:
+        _ensure_number_range(t_high, "frame_removal.params.motion.t_high", errors, 0.0, None)
+    if isinstance(t_low, (int, float)) and isinstance(t_high, (int, float)) and float(t_high) <= float(t_low):
+        errors.append("frame_removal.params.motion.t_high must be > t_low")
+    if "state_source" in motion_cfg:
+        src = str(motion_cfg.get("state_source", "")).strip().lower()
+        if src not in {"pixel", "bbox", "hybrid"}:
+            errors.append("frame_removal.params.motion.state_source must be one of: pixel, bbox, hybrid")
+    bbox_t_low_px = motion_cfg.get("bbox_t_low_px", None)
+    bbox_t_high_px = motion_cfg.get("bbox_t_high_px", None)
+    if bbox_t_low_px is not None:
+        _ensure_number_range(
+            bbox_t_low_px,
+            "frame_removal.params.motion.bbox_t_low_px",
+            errors,
+            0.0,
+            None,
+        )
+    if bbox_t_high_px is not None:
+        _ensure_number_range(
+            bbox_t_high_px,
+            "frame_removal.params.motion.bbox_t_high_px",
+            errors,
+            0.0,
+            None,
+        )
+    if isinstance(bbox_t_low_px, (int, float)) and isinstance(bbox_t_high_px, (int, float)):
+        if float(bbox_t_high_px) <= float(bbox_t_low_px):
+            errors.append("frame_removal.params.motion.bbox_t_high_px must be > bbox_t_low_px")
+    if "enter_motion_frames" in motion_cfg:
+        _ensure_number_range(
+            motion_cfg["enter_motion_frames"],
+            "frame_removal.params.motion.enter_motion_frames",
+            errors,
+            1,
+            None,
+        )
+    if "enter_still_frames" in motion_cfg:
+        _ensure_number_range(
+            motion_cfg["enter_still_frames"],
+            "frame_removal.params.motion.enter_still_frames",
+            errors,
+            1,
+            None,
+        )
+    if "enable" in smooth_cfg:
+        _ensure_type(smooth_cfg["enable"], bool, "frame_removal.params.bbox_smoothing.enable", errors)
+    if "ema_alpha" in smooth_cfg:
+        _ensure_number_range(
+            smooth_cfg["ema_alpha"],
+            "frame_removal.params.bbox_smoothing.ema_alpha",
+            errors,
+            0.0,
+            1.0,
+        )
+    if "enable" in dual_cfg:
+        _ensure_type(dual_cfg["enable"], bool, "frame_removal.dual_timeline.enable", errors)
+    for key in ("roi_motion_interval", "roi_still_interval", "bg_interval", "bg_idle_interval"):
+        if key in dual_cfg:
+            _ensure_number_range(
+                dual_cfg[key],
+                f"frame_removal.dual_timeline.{key}",
+                errors,
+                1,
+                None,
+            )
+
+    # compression
+    dcvc_cfg = _as_dict(comp_cfg.get("dcvc", {}), "compression.dcvc", errors)
+    quality_cfg = _as_dict(comp_cfg.get("quality", {}), "compression.quality", errors)
+    roi_comp_cfg = _as_dict(comp_cfg.get("roi", {}), "compression.roi", errors)
 
     for key in ("model_i", "model_p", "repo_dir"):
-        if not dcvc.get(key):
+        if not dcvc_cfg.get(key):
             errors.append(f"compression.dcvc.{key} is required")
-    if dcvc.get("model_i"):
-        _must_exist(str(dcvc["model_i"]), "compression.dcvc.model_i", root, errors)
-    if dcvc.get("model_p"):
-        _must_exist(str(dcvc["model_p"]), "compression.dcvc.model_p", root, errors)
-    if dcvc.get("repo_dir"):
-        _must_exist(str(dcvc["repo_dir"]), "compression.dcvc.repo_dir", root, errors)
-    if "device" in dcvc:
-        _check_device(dcvc["device"], "compression.dcvc.device", errors)
+    if dcvc_cfg.get("model_i"):
+        _must_exist(str(dcvc_cfg["model_i"]), "compression.dcvc.model_i", root, errors)
+    if dcvc_cfg.get("model_p"):
+        _must_exist(str(dcvc_cfg["model_p"]), "compression.dcvc.model_p", root, errors)
+    if dcvc_cfg.get("repo_dir"):
+        _must_exist(str(dcvc_cfg["repo_dir"]), "compression.dcvc.repo_dir", root, errors)
+    if "reset_interval" in dcvc_cfg:
+        _ensure_number_range(dcvc_cfg["reset_interval"], "compression.dcvc.reset_interval", errors, 1, None)
+    if "device" in dcvc_cfg:
+        dev = dcvc_cfg.get("device")
+        if isinstance(dev, bool):
+            errors.append(
+                "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+            )
+        elif isinstance(dev, int):
+            if int(dev) < 0:
+                errors.append("compression.dcvc.device integer index must be >= 0")
+        elif isinstance(dev, str):
+            s = dev.strip().lower()
+            if s in {"cpu", "mps"}:
+                errors.append("Strict GPU runtime forbids compression.dcvc.device set to CPU/MPS")
+            valid = (
+                s in {"auto", "cuda"}
+                or s.isdigit()
+                or (s.startswith("cuda:") and s.split(":", 1)[1].strip().isdigit())
+            )
+            if not valid:
+                errors.append(
+                    "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+                )
+        else:
+            errors.append(
+                "compression.dcvc.device must be one of: auto, cuda, cuda:<index>, or integer GPU index"
+            )
+    if "use_cuda" in dcvc_cfg:
+        _ensure_type(dcvc_cfg["use_cuda"], bool, "compression.dcvc.use_cuda", errors)
+        if isinstance(dcvc_cfg.get("use_cuda"), bool) and not bool(dcvc_cfg.get("use_cuda")):
+            errors.append("Strict GPU runtime forbids compression.dcvc.use_cuda=false")
 
-    for qp_key in ("roi_qp_i", "roi_qp_p", "bg_qp_i", "bg_qp_p"):
-        if qp_key in qual:
-            _check_range(qual[qp_key], f"compression.quality.{qp_key}", errors, 0, 63)
+    for key in ("roi_qp_i", "roi_qp_p", "bg_qp_i", "bg_qp_p"):
+        if key in quality_cfg:
+            _ensure_number_range(quality_cfg[key], f"compression.quality.{key}", errors, 0, 63)
+    if "min_conf" in roi_comp_cfg:
+        _ensure_number_range(roi_comp_cfg["min_conf"], "compression.roi.min_conf", errors, 0.0, 1.0)
 
-    if errors:
-        raise ValueError("Invalid compression config:\n- " + "\n- ".join(errors))
-
-
-# ── Decompression config ──────────────────────────────────────────────────────
-
-def validate_decompression_config(cfg: Dict[str, Any], root_dir: Optional[Path] = None) -> None:
-    errors: List[str] = []
-    root = (root_dir or Path.cwd()).resolve()
-
-    decomp = _as_dict(cfg.get("decompression", {}), "decompression", errors)
-    dcvc   = _as_dict(decomp.get("dcvc", {}), "decompression.dcvc", errors)
-
-    for key in ("model_i", "model_p", "repo_dir"):
-        if not dcvc.get(key):
-            errors.append(f"decompression.dcvc.{key} is required")
-    if dcvc.get("model_i"):
-        _must_exist(str(dcvc["model_i"]), "decompression.dcvc.model_i", root, errors)
-    if dcvc.get("model_p"):
-        _must_exist(str(dcvc["model_p"]), "decompression.dcvc.model_p", root, errors)
-    if dcvc.get("repo_dir"):
-        _must_exist(str(dcvc["repo_dir"]), "decompression.dcvc.repo_dir", root, errors)
-
-    if errors:
-        raise ValueError("Invalid decompression config:\n- " + "\n- ".join(errors))
-
-
-# ── Restoration config ────────────────────────────────────────────────────────
-
-def validate_restoration_config(cfg: Dict[str, Any], root_dir: Optional[Path] = None) -> None:
-    errors: List[str] = []
-    root = (root_dir or Path.cwd()).resolve()
-
-    if "device" in cfg:
-        _check_device(cfg["device"], "device", errors)
-
-    model = _as_dict(cfg.get("model", {}), "model", errors)
-    ckpt  = model.get("checkpoint")
-    if not ckpt:
-        errors.append("model.checkpoint is required")
-    elif isinstance(ckpt, str) and ckpt.strip():
-        _must_exist(ckpt.strip(), "model.checkpoint", root, errors)
-
-    T = model.get("temporal_window", 3)
-    if isinstance(T, int) and T % 2 == 0:
-        errors.append("model.temporal_window must be odd")
-
-    infer = _as_dict(cfg.get("inference", {}), "inference", errors)
-    if "ddim_steps" in infer:
-        _check_range(infer["ddim_steps"], "inference.ddim_steps", errors, lo=1)
-    if "t_start" in infer:
-        _check_range(infer["t_start"], "inference.t_start", errors, lo=0, hi=999)
-    if "tile_size" in infer:
-        _check_range(infer["tile_size"], "inference.tile_size", errors, lo=0)
+    # output
+    if "write_outputs" in out_cfg:
+        _ensure_type(out_cfg["write_outputs"], bool, "output.write_outputs", errors)
+    if "out_dir" in out_cfg:
+        _ensure_type(out_cfg["out_dir"], str, "output.out_dir", errors)
 
     if errors:
-        raise ValueError("Invalid restoration config:\n- " + "\n- ".join(errors))
-
-
-# ── Upscaling config ──────────────────────────────────────────────────────────
-
-def validate_upscaling_config(cfg: Dict[str, Any], root_dir: Optional[Path] = None) -> None:
-    errors: List[str] = []
-    root = (root_dir or Path.cwd()).resolve()
-
-    if "device" in cfg:
-        _check_device(cfg["device"], "device", errors)
-
-    scale = cfg.get("scale")
-    if scale is None:
-        errors.append("scale is required")
-    elif not isinstance(scale, int) or scale not in {1, 2, 4}:
-        errors.append("scale must be an integer in {1, 2, 4}")
-
-    model = _as_dict(cfg.get("model", {}), "model", errors)
-    ckpt  = model.get("checkpoint")
-    if not ckpt:
-        errors.append("model.checkpoint is required")
-    elif isinstance(ckpt, str) and ckpt.strip():
-        _must_exist(ckpt.strip(), "model.checkpoint", root, errors)
-
-    infer = _as_dict(cfg.get("inference", {}), "inference", errors)
-    if "ddim_steps" in infer:
-        _check_range(infer["ddim_steps"], "inference.ddim_steps", errors, lo=1)
-    if "t_start" in infer:
-        _check_range(infer["t_start"], "inference.t_start", errors, lo=0, hi=999)
-    if "tile_size" in infer:
-        _check_range(infer["tile_size"], "inference.tile_size", errors, lo=0)
-
-    if errors:
-        raise ValueError("Invalid upscaling config:\n- " + "\n- ".join(errors))
+        raise ValueError("Invalid pipeline config:\n- " + "\n- ".join(errors))

@@ -150,30 +150,113 @@ def _parse_args() -> argparse.Namespace:
 # ── Stage implementations ─────────────────────────────────────────────────────
 
 def stage_compress(input_video: Path, pipeline_cfg: dict):
-    """Returns archive bytes + detection dict."""
+    """Returns archive bytes."""
+    import io, json as _json, zipfile
+
+    from src.roi_detection.roi_detector import run_roi_detection
+    from src.frame_removal import remove_redundant_frames, apply_dual_timeline_policy
+    from src.compression import compress_keep_streams_dcvc
+
+    roi_cfg   = pipeline_cfg.get("roi_detection", {}) or {}
+    frame_cfg = pipeline_cfg.get("frame_removal",  {}) or {}
+    comp_cfg  = pipeline_cfg.get("compression",    {}) or {}
+
+    _status("compress — ROI detection ...")
+    if roi_cfg.get("enable", True):
+        roi_result = run_roi_detection(str(input_video), roi_cfg)
+    else:
+        roi_result = {"video_path": str(input_video), "frames": {}}
+    roi_frames = roi_result.get("frames", {}) or {}
+    bbox_map = {int(k): v for k, v in roi_frames.items()}
+
+    _status("compress — frame selection ...")
+    frame_result = remove_redundant_frames(str(input_video), bbox_map, frame_cfg)
+    frame_result = apply_dual_timeline_policy(frame_result, frame_cfg)
+
     _status("compress — DCVC encode ...")
-    from src.compression.phase_compress import compress_video
-    archive_bytes = compress_video(str(input_video), pipeline_cfg)
+    compression_result = compress_keep_streams_dcvc(
+        source_video_path=str(input_video),
+        roi_bbox_map=roi_frames,
+        frame_drop_result=frame_result,
+        compression_cfg=comp_cfg,
+        root_dir=ROOT,
+    )
+
+    archive_entries = {
+        "roi_detections.json": "roi_detections.json",
+        "frame_drop.json":     "frame_drop.json",
+        "roi.bin":             "roi.bin",
+        "bg.bin":              "bg.bin",
+        "meta.json":           "meta.json",
+    }
+    manifest = {
+        "version": 2,
+        "entries": archive_entries,
+        "extras": {"runtime_config": "compression.runtime_config.json"},
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive_manifest.json",              _json.dumps(manifest, indent=2))
+        zf.writestr("roi_detections.json",                _json.dumps(roi_result, indent=2))
+        zf.writestr("frame_drop.json",                    _json.dumps(frame_result, indent=2))
+        zf.writestr("roi.bin",                            bytes(compression_result["roi_bin_bytes"]))
+        zf.writestr("bg.bin",                             bytes(compression_result["bg_bin_bytes"]))
+        zf.writestr("meta.json",                          _json.dumps(compression_result["meta"], indent=2))
+        zf.writestr("compression.runtime_config.json",    _json.dumps(pipeline_cfg, indent=2))
+    archive_bytes = buf.getvalue()
+
+    import os; os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     _status(f"  archive size: {len(archive_bytes)/1e6:.2f} MB")
     return archive_bytes
 
 
 def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
     """Returns (frames, fps, width, height, detections)."""
+    import io, json as _json, os, shutil, subprocess, tempfile, zipfile
+
     _status("decompress — DCVC decode ...")
-    import zipfile, io, json as _json
-    from src.decompression.phase_decompress import decompress_archive
+
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as arc:
-        detections = _json.loads(arc.read("detections.json"))
-    decomp_cfg = _merge_sub_config(pipeline_cfg, "decompression")
-    result = decompress_archive(archive_bytes, decomp_cfg)
-    frames = result["frames"]
-    fps    = result["fps"]
-    width  = result.get("width", frames[0].shape[1] if frames else 0)
-    height = result.get("height", frames[0].shape[0] if frames else 0)
+        roi_json = _json.loads(arc.read("roi_detections.json"))
+    detections = {int(k): v for k, v in (roi_json.get("frames", {}) or {}).items()}
+
+    tmpdir = tempfile.mkdtemp(prefix="pipeline_decomp_")
+    archive_path  = os.path.join(tmpdir, "archive.zip")
+    out_path      = os.path.join(tmpdir, "decompressed.mp4")
+    dec_cfg_path  = os.path.join(tmpdir, "decompression.yaml")
+
+    with open(archive_path, "wb") as f:
+        f.write(archive_bytes)
+
+    import yaml as _yaml
+    dec_sub = _merge_sub_config(pipeline_cfg, "decompression")
+    with open(dec_cfg_path, "w") as f:
+        _yaml.dump({"decompression": dec_sub}, f)
+
+    try:
+        subprocess.run(
+            [sys.executable, str(ROOT / "run_decompression.py"),
+             "--archive", archive_path,
+             "--config",  dec_cfg_path,
+             "--output",  out_path],
+            check=True,
+        )
+        cap = cv2.VideoCapture(out_path)
+        fps    = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frames = []
+        while True:
+            ok, frm = cap.read()
+            if not ok:
+                break
+            frames.append(frm)
+        cap.release()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     _status(f"  {len(frames)} frames @ {fps:.1f} fps  {width}×{height}")
-    # DCVC sets CUDA_VISIBLE_DEVICES — clear it so later CUDA ops work
-    import os; os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     return frames, fps, width, height, detections
 
 

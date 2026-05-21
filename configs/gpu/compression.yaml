@@ -1,86 +1,83 @@
-detection:
-  model_path: "models/md_v5a.0.0.pt"
-  variant: "megadetector"
-  device: "cuda:0"
-  half: true
-  processing_scale: 1.00       # run detector at full input resolution (important at low res)
-  imgsz: 640
-  conf: 0.10
-  iou_nms: 0.50
-  bbox_pad_frac: 0.10          # expand each bbox by this fraction of its own size
-  bbox_pad_px: 8               # additional fixed-pixel padding
-  keyframe_interval: 15        # run full YOLO every N frames; track between keyframes
+roi_detection:
+  enable: true
+  paths:
+    animal_model_path: "models/MDV6-yolov9-c.pt"
+    animal_model_path_onnx: "models/MDV6-yolov9-c.onnx"
+  runtime:
+    device: "cuda:0"
+    # Keep detector backend explicit for reproducible experiments.
+    prefer_onnx: false
+    prefer_onnx_strict: false
+    half: true
+    processing_scale: 0.50
+    imgsz: 640
+    conf: 0.25
+    iou_nms: 0.50
+    target_class_ids: [0]
+    start_frame: 0
+    end_frame: -1
+    keyframe_interval: 15
+    model_merge_iou: 0.30
+    bbox_pad_frac: 0.10
+    bbox_pad_px: 8
   tracking:
-    enabled: true
-    min_hits: 1                # confirmations before a track is emitted
-    max_det_gap: 180           # frames a track can survive without a detection
-    mask_hold_frames: 15       # keep last known bbox for N frames after detection loss
-    match_iou: 0.30            # IoU threshold for detection→track assignment
-    vel_smooth: 0.70           # EMA coefficient for velocity smoothing
+    enable_propagation: true
+    match_iou: 0.30
+    min_hits: 2
+    max_det_gap: 90
+    vel_smooth: 0.70
+    klt_max_points: 80
+    klt_min_points: 10
+
+frame_removal:
+  params:
+    roi:
+      halo_frac: 0.20
+      fixed_size: 160
+      blur_ksize: 5
+      gray: true
+    bbox_smoothing:
+      enable: true
+      ema_alpha: 0.60
+    motion:
+      state_source: "hybrid"
+      t_low: 0.90
+      t_high: 1.90
+      bbox_t_low_px: 0.50
+      bbox_t_high_px: 1.00
+      enter_motion_frames: 2
+      enter_still_frames: 4
+  dual_timeline:
+    enable: true
+    roi_motion_interval: 2
+    roi_still_interval: 3
+    bg_interval: 6
+    bg_idle_interval: 10
 
 compression:
+  # Low-memory mode streams ROI/BG frames into the DCVC encoder instead of
+  # caching all kept full-resolution frames in RAM (reduces peak CPU RAM).
+  low_memory: true
   dcvc:
     repo_dir: "DCVC"
     model_i: "models/cvpr2025_image.pth.tar"
     model_p: "models/cvpr2025_video.pth.tar"
-    device: "cuda:0"
+    device: "cuda"
     use_cuda: true
     cuda_idx: 0
     reset_interval: 32
-    intra_period: -1           # -1 = first frame only is I-frame
+    intra_period: -1
     force_zero_thres: null
-  quality:
-    roi_qp_i: 63               # high quality for ROI I-frames
-    roi_qp_p: 63               # high quality for ROI P-frames
-    bg_qp_i: 5                 # aggressive background compression (0=worst, 63=best)
-    bg_qp_p: 5                 # aggressive background compression (0=worst, 63=best)
   roi:
-    dilate_px: 8               # dilate ROI mask before stream split
-    min_conf: 0.25             # minimum detection confidence to include in ROI
-
-restoration:
-  config: "configs/gpu/restoration.yaml"
-  enable: true
-
-wan_upscaling:
-  model_id: "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
-  out_w: 960
-  out_h: 720
-  chunk_frames: 17        # frames per Wan2.1 call (match model's temporal window)
-  overlap_frames: 4       # blend overlap between chunks
-  num_steps: 20           # diffusion steps
-  guidance_scale: 5.0
-  cpu_offload: true       # offload to CPU between ops to save VRAM
-  seed: 42
-
-osediff_upscaling:
-  # osediff_repo defaults to third_party/osediff inside this repo — no need to set it
-  # sd21_path defaults to <osediff_repo>/models/sd21-base
-  # osediff_path defaults to <osediff_repo>/preset/models/osediff.pkl
-  out_w: 960
-  out_h: 720
-  mixed_precision: "fp16"
-  batch_size: 1
-  prompt: "high quality, sharp details, professional wildlife photograph, natural colors"
-  color_fix: "adain"                     # "adain", "wavelet", or "" to disable
-  seed: 42
-  vae_encoder_tiled_size: 1024
-  vae_decoder_tiled_size: 224
-  latent_tiled_size: 96
-  latent_tiled_overlap: 32
-
-cogvideo_upscaling:
-  model_id: "THUDM/CogVideoX-5b"
-  out_w: 720
-  out_h: 480
-  strength: 0.55          # used when roi_bg_separate is false
-  chunk_frames: 49        # frames per call (must satisfy (n-1)%8==0); 49 ≈ 1.6s at 30fps
-  overlap_frames: 8
-  num_steps: 50
-  guidance_scale: 6.0
-  cpu_offload: true
-  seed: 42
-  roi_feather_px: 24      # feather pixels for soft ROI mask edges (original frames pasted on top)
+    min_conf: 0.0
+    dilate_px: 0
+  quality:
+    roi_qp_i: 63
+    roi_qp_p: 63
+    bg_qp_i: 25
+    bg_qp_p: 25
 
 output:
+  write_outputs: true
+  # Empty string keeps archive next to input video.
   out_dir: "outputs/compression"

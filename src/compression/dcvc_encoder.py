@@ -354,28 +354,3 @@ def encode_dcvc_frames_to_bytes(
         video_path=str(video_path),
         use_kept_frames=True,
     )
-
-
-# ── Compatibility wrapper for phase_compress.py ───────────────────────────────
-
-def encode_frames_to_bytes(
-    frames_iter: Iterable[Tuple[int, np.ndarray]],
-    *,
-    info: "VideoInfo",
-    dcvc_cfg: Dict[str, Any],
-    quality_cfg: Dict[str, Any],
-    source_label: str = "",
-) -> Dict[str, Any]:
-    """
-    API bridge for phase_compress.py.
-
-    Converts (dcvc_cfg, quality_cfg) into the unified cfg dict expected by
-    encode_dcvc_frames_to_bytes.
-    """
-    cfg = {"dcvc": dcvc_cfg, "quality": quality_cfg}
-    return encode_dcvc_frames_to_bytes(
-        frames_iter,
-        info=info,
-        cfg=cfg,
-        video_path=f"<{source_label}>" if source_label else "<stream>",
-    )
