@@ -545,6 +545,40 @@ def _decode_stream_bytes_dcvc(
     return frames
 
 
+def _decode_stream_bytes(
+    stream_bytes: bytes,
+    meta: Dict[str, Any],
+    stream: str,
+    frame_count_hint: Optional[int],
+    progress_cb: Optional[Callable[[int], None]],
+) -> List[np.ndarray]:
+    """Dispatch to DCVC or ffmpeg decoder based on codec stored in meta."""
+    codec = str(meta.get("codec", "dcvc")).lower()
+    if codec != "dcvc":
+        video_info = meta.get("video", {}) or {}
+        width  = int(video_info.get("width",  0) or 0)
+        height = int(video_info.get("height", 0) or 0)
+        if width <= 0 or height <= 0:
+            stream_meta = (meta.get("streams", {}) or {}).get(stream, {}) or {}
+            width  = int(stream_meta.get("width",  width)  or width)
+            height = int(stream_meta.get("height", height) or height)
+        from .ffmpeg_decoder import decode_ffmpeg_stream_bytes
+        return decode_ffmpeg_stream_bytes(
+            stream_bytes,
+            width=width,
+            height=height,
+            frame_count_hint=frame_count_hint,
+            progress_cb=progress_cb,
+        )
+    dcvc_cfg   = meta.get("dcvc", {}) or {}
+    video_info = meta.get("video", {}) or {}
+    return _decode_stream_bytes_dcvc(
+        stream_bytes, dcvc_cfg, video_info,
+        frame_count_hint=frame_count_hint,
+        progress_cb=progress_cb,
+    )
+
+
 def decode_roi_bg_streams(
     roi_bin_bytes: bytes,
     bg_bin_bytes: bytes,
@@ -554,37 +588,26 @@ def decode_roi_bg_streams(
     max_frames_roi: Optional[int] = None,
     max_frames_bg: Optional[int] = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-    """
-    Decode ROI and BG streams and return them separately.
-    """
-    dcvc_cfg = meta.get("dcvc", {}) or {}
-    video_info = meta.get("video", {}) or {}
+    """Decode ROI and BG streams and return them separately."""
     streams = meta.get("streams", {}) or {}
     roi_stream_meta = streams.get("roi", {}) or {}
-    bg_stream_meta = streams.get("bg", {}) or {}
+    bg_stream_meta  = streams.get("bg",  {}) or {}
 
     roi_count_hint = roi_stream_meta.get("frames_encoded", None)
     if roi_count_hint is None and isinstance(roi_stream_meta.get("frame_index_map", None), list):
-        roi_count_hint = len(roi_stream_meta.get("frame_index_map", []))
+        roi_count_hint = len(roi_stream_meta["frame_index_map"])
     bg_count_hint = bg_stream_meta.get("frames_encoded", None)
     if bg_count_hint is None and isinstance(bg_stream_meta.get("frame_index_map", None), list):
-        bg_count_hint = len(bg_stream_meta.get("frame_index_map", []))
+        bg_count_hint = len(bg_stream_meta["frame_index_map"])
 
-    roi_hint = _resolve_hint(roi_count_hint, max_frames_roi)
-    bg_hint = _resolve_hint(bg_count_hint, max_frames_bg)
-
-    roi_frames = _decode_stream_bytes_dcvc(
-        roi_bin_bytes,
-        dcvc_cfg,
-        video_info,
-        frame_count_hint=roi_hint,
+    roi_frames = _decode_stream_bytes(
+        roi_bin_bytes, meta, "roi",
+        frame_count_hint=_resolve_hint(roi_count_hint, max_frames_roi),
         progress_cb=progress_cb_roi,
     )
-    bg_frames = _decode_stream_bytes_dcvc(
-        bg_bin_bytes,
-        dcvc_cfg,
-        video_info,
-        frame_count_hint=bg_hint,
+    bg_frames = _decode_stream_bytes(
+        bg_bin_bytes, meta, "bg",
+        frame_count_hint=_resolve_hint(bg_count_hint, max_frames_bg),
         progress_cb=progress_cb_bg,
     )
     return roi_frames, bg_frames

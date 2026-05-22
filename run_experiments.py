@@ -357,6 +357,46 @@ def exp_rd_baselines() -> None:
                ["method", "archive_kb", "psnr", "ssim", "lpips"], rows)
 
 
+def exp_codec_comparison() -> None:
+    """
+    Compare ROI-aware pipeline across codec backends: DCVC, AV1, HEVC, H.264.
+    Runs compress+decompress+restore for each codec at its default quality settings,
+    measures PSNR/SSIM/LPIPS and archive size.
+    Results go into the paper appendix; best codec is used for main results.
+    """
+    print("\n=== Codec comparison ===")
+
+    codecs = [
+        ("dcvc", {},),
+        ("av1",  {"ffmpeg": {"av1_encoder": "libsvtav1"}}),
+        ("hevc", {"ffmpeg": {"hevc_encoder": "libx265"}}),
+        ("h264", {"ffmpeg": {"h264_encoder": "libx264"}}),
+    ]
+
+    rows = []
+    for codec, extra_cfg in codecs:
+        print(f"\n-- codec={codec} --")
+        base_cfg = copy.deepcopy(_load_yaml(COMPRESS_CFG))
+        base_cfg.setdefault("compression", {})["codec"] = codec
+        for k, v in extra_cfg.items():
+            base_cfg["compression"].setdefault(k, {}).update(v)
+        tmp = _write_tmp_cfg(base_cfg)
+        out = OUT_DIR / f"codec_{codec}.mp4"
+        try:
+            _pipeline(["compress", "decompress", "restore"], out, tmp)
+            m  = _eval_metrics(out, RESULT_DIR / f"codec_{codec}.csv")
+            kb = _archive_kb(tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+        row = {"codec": codec, "archive_kb": round(kb, 1), **m}
+        rows.append(row)
+        print(f"  {codec:6s}  {kb:.0f} KB  PSNR={m['psnr']:.2f}  "
+              f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}")
+
+    _write_csv(RESULT_DIR / "codec_comparison.csv",
+               ["codec", "archive_kb", "psnr", "ssim", "lpips"], rows)
+
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 def print_summary() -> None:
@@ -366,6 +406,7 @@ def print_summary() -> None:
         ("DDIM ablation",       RESULT_DIR / "ddim_ablation.csv"),
         ("Temporal ablation",   RESULT_DIR / "temporal_ablation.csv"),
         ("R-D baselines",       RESULT_DIR / "rd_baselines.csv"),
+        ("Codec comparison",    RESULT_DIR / "codec_comparison.csv"),
     ]
     print("\n" + "=" * 72)
     print("RESULTS SUMMARY")
@@ -397,12 +438,13 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    ap.add_argument("--all",            action="store_true", help="Run all experiments")
-    ap.add_argument("--stage-ablation", action="store_true")
-    ap.add_argument("--qp-sweep",       action="store_true")
-    ap.add_argument("--ddim-ablation",  action="store_true")
-    ap.add_argument("--temporal",       action="store_true")
-    ap.add_argument("--rd",             action="store_true")
+    ap.add_argument("--all",               action="store_true", help="Run all experiments")
+    ap.add_argument("--stage-ablation",    action="store_true")
+    ap.add_argument("--qp-sweep",          action="store_true")
+    ap.add_argument("--ddim-ablation",     action="store_true")
+    ap.add_argument("--temporal",          action="store_true")
+    ap.add_argument("--rd",                action="store_true")
+    ap.add_argument("--codec-comparison",  action="store_true")
     ap.add_argument("--summary",        action="store_true",
                     help="Print collected results without running anything")
     ap.add_argument("--video", default=str(GT_VIDEO),
@@ -423,7 +465,7 @@ def main() -> None:
 
     run_all = args.all or not any([
         args.stage_ablation, args.qp_sweep, args.ddim_ablation,
-        args.temporal, args.rd,
+        args.temporal, args.rd, args.codec_comparison,
     ])
 
     if run_all or args.stage_ablation:
@@ -436,6 +478,8 @@ def main() -> None:
         exp_temporal_ablation()
     if run_all or args.rd:
         exp_rd_baselines()
+    if run_all or args.codec_comparison:
+        exp_codec_comparison()
 
     print_summary()
 

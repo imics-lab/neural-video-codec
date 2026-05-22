@@ -155,7 +155,7 @@ def stage_compress(input_video: Path, pipeline_cfg: dict):
 
     from src.roi_detection.roi_detector import run_roi_detection
     from src.frame_removal import remove_redundant_frames, apply_dual_timeline_policy
-    from src.compression import compress_keep_streams_dcvc
+    from src.compression import compress_keep_streams
 
     roi_cfg   = pipeline_cfg.get("roi_detection", {}) or {}
     frame_cfg = pipeline_cfg.get("frame_removal",  {}) or {}
@@ -174,7 +174,7 @@ def stage_compress(input_video: Path, pipeline_cfg: dict):
     frame_result = apply_dual_timeline_policy(frame_result, frame_cfg)
 
     _status("compress — DCVC encode ...")
-    compression_result = compress_keep_streams_dcvc(
+    compression_result = compress_keep_streams(
         source_video_path=str(input_video),
         roi_bbox_map=roi_frames,
         frame_drop_result=frame_result,
