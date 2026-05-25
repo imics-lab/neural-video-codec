@@ -45,7 +45,10 @@ def restore_frames(
         result = []
         for fi, (decomp_f, rest_f) in enumerate(zip(frames, restored)):
             mask  = build_frame_mask(frame_idx=fi, width=width, height=height,
-                                     roi_map=detections, min_conf=0.0, dilate_px=0)
+                                     mask_source="roi_detection",
+                                     roi_boxes_map=detections,
+                                     frame_drop_json={},
+                                     roi_min_conf=0.0, roi_dilate_px=0)
             alpha = mask_to_alpha(mask, feather_px=8)[..., None]  # (H, W, 1)
             # alpha=1 in ROI, 0 in BG
             # ROI: lerp(decompressed, restored, roi_strength)
