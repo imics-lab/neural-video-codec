@@ -34,6 +34,7 @@ tqdm>=4.66.0
 
 # Evaluation metrics
 scikit-image>=0.22.0
+pytorch-msssim>=1.0.0
 
 # DCVC C++ extension build deps
 pybind11>=2.11.0
