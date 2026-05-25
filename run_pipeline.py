@@ -503,8 +503,11 @@ def main() -> int:
         _status(f"  {stage} done in {time.perf_counter()-t_s:.1f}s")
 
     # ── Write final output ────────────────────────────────────────────────────
-    _save_video(frames, final_out, fps)
-    _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s → {final_out}")
+    if frames:
+        _save_video(frames, final_out, fps)
+        _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s → {final_out}")
+    else:
+        _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s (compress-only, no video output)")
     return 0
 
 

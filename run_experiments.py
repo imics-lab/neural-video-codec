@@ -148,15 +148,31 @@ def _eval_temporal(video: Path) -> float:
 
 
 def _archive_kb(cfg_path: Path) -> float:
-    """Compress GT_VIDEO with cfg_path and return the archive size in KB."""
-    tmp = OUT_DIR / "_size_probe.zip"
+    """Compress GT_VIDEO with cfg_path and return the archive size in KB.
+
+    Uses run_pipeline.py --stages compress --save-intermediate to avoid
+    run_compression.py's strict ONNX-path validation. The intermediate archive
+    is written by the pipeline to {out_dir}/{stem}.zip per its convention.
+    """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    _run(_py("run_compression.py",
-             GT_VIDEO, "--config", cfg_path, "--output", tmp))
+    cfg_data = _load_yaml(cfg_path)
+    pipeline_out_dir = Path(
+        (cfg_data.get("output") or {}).get("out_dir", "outputs/pipeline")
+    )
+    archive_path = pipeline_out_dir / f"{GT_VIDEO.stem}.zip"
+    tmp_video = OUT_DIR / "_size_probe.mp4"
+    _run(_py("run_pipeline.py",
+             "--video", GT_VIDEO, "--config", cfg_path,
+             "--stages", "compress",
+             "--save-intermediate",
+             "--output", tmp_video))
     if DRY_RUN:
         return 0.0
-    size = tmp.stat().st_size / 1024.0
-    tmp.unlink(missing_ok=True)
+    if not archive_path.exists():
+        return float("nan")
+    size = archive_path.stat().st_size / 1024.0
+    archive_path.unlink(missing_ok=True)
+    tmp_video.unlink(missing_ok=True)
     return size
 
 
