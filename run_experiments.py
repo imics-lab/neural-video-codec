@@ -107,20 +107,30 @@ def _set_qp(cfg: Dict[str, Any], roi_qp: int, bg_qp: int) -> None:
 
 # ── Metric helpers ────────────────────────────────────────────────────────────
 
-def _eval_metrics(pred: Path, csv_out: Path) -> Dict[str, float]:
+def _eval_metrics(pred: Path, csv_out: Path, *, vmaf: bool = False) -> Dict[str, float]:
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    _run(_py("eval_metrics.py",
-             "--pred", pred, "--gt", GT_VIDEO, "--out-csv", csv_out))
+    cmd = _py("eval_metrics.py", "--pred", pred, "--gt", GT_VIDEO, "--out-csv", csv_out)
+    if not vmaf:
+        cmd += ["--no-vmaf"]
+    _run(cmd)
     if DRY_RUN:
-        return {"psnr": 0.0, "ssim": 0.0, "lpips": 0.0}
+        return {"psnr": 0.0, "ssim": 0.0, "ms_ssim": 0.0, "lpips": 0.0}
     rows = list(csv.DictReader(open(csv_out)))
     if not rows:
-        return {"psnr": float("nan"), "ssim": float("nan"), "lpips": float("nan")}
-    psnr  = float(np.mean([float(r["psnr"]) for r in rows]))
-    ssim  = float(np.mean([float(r["ssim"]) for r in rows]))
-    lv    = [float(r["lpips"]) for r in rows if r.get("lpips", "nan") != "nan"]
-    lpips = float(np.mean(lv)) if lv else float("nan")
-    return {"psnr": psnr, "ssim": ssim, "lpips": lpips}
+        nan = float("nan")
+        return {"psnr": nan, "ssim": nan, "ms_ssim": nan, "lpips": nan}
+
+    def _mean(key: str) -> float:
+        vals = [float(r[key]) for r in rows
+                if r.get(key, "nan") not in ("nan", "", None)]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    return {
+        "psnr":    _mean("psnr"),
+        "ssim":    _mean("ssim"),
+        "ms_ssim": _mean("ms_ssim"),
+        "lpips":   _mean("lpips"),
+    }
 
 
 def _eval_temporal(video: Path) -> float:
@@ -204,10 +214,10 @@ def exp_stage_ablation() -> None:
         row = {"stage": label, **m, "warp_err_1e4": round(we, 4)}
         rows.append(row)
         print(f"  {label:12s}  PSNR={m['psnr']:.2f}  SSIM={m['ssim']:.4f}  "
-              f"LPIPS={m['lpips']:.4f}  WE={we:.4f}")
+              f"MS-SSIM={m['ms_ssim']:.4f}  LPIPS={m['lpips']:.4f}  WE={we:.4f}")
 
     _write_csv(RESULT_DIR / "stage_ablation.csv",
-               ["stage", "psnr", "ssim", "lpips", "warp_err_1e4"], rows)
+               ["stage", "psnr", "ssim", "ms_ssim", "lpips", "warp_err_1e4"], rows)
 
 
 def exp_qp_sweep() -> None:
@@ -234,7 +244,7 @@ def exp_qp_sweep() -> None:
               f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}")
 
     _write_csv(RESULT_DIR / "qp_sweep.csv",
-               ["bg_qp", "archive_kb", "psnr", "ssim", "lpips"], rows)
+               ["bg_qp", "archive_kb", "psnr", "ssim", "ms_ssim", "lpips"], rows)
 
 
 def exp_ddim_ablation() -> None:
@@ -265,7 +275,7 @@ def exp_ddim_ablation() -> None:
               f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}")
 
     _write_csv(RESULT_DIR / "ddim_ablation.csv",
-               ["ddim_steps", "elapsed_s", "psnr", "ssim", "lpips"], rows)
+               ["ddim_steps", "elapsed_s", "psnr", "ssim", "ms_ssim", "lpips"], rows)
 
 
 def exp_temporal_ablation() -> None:
@@ -295,7 +305,7 @@ def exp_temporal_ablation() -> None:
               f"LPIPS={m['lpips']:.4f}  WE={we:.4f}")
 
     _write_csv(RESULT_DIR / "temporal_ablation.csv",
-               ["T", "psnr", "ssim", "lpips", "warp_err_1e4"], rows)
+               ["T", "psnr", "ssim", "ms_ssim", "lpips", "warp_err_1e4"], rows)
 
 
 def exp_rd_baselines() -> None:
@@ -354,7 +364,7 @@ def exp_rd_baselines() -> None:
     print(f"  Ours  {kb:.0f} KB  PSNR={m['psnr']:.2f}  SSIM={m['ssim']:.4f}")
 
     _write_csv(RESULT_DIR / "rd_baselines.csv",
-               ["method", "archive_kb", "psnr", "ssim", "lpips"], rows)
+               ["method", "archive_kb", "psnr", "ssim", "ms_ssim", "lpips"], rows)
 
 
 def exp_codec_comparison() -> None:
@@ -394,7 +404,7 @@ def exp_codec_comparison() -> None:
               f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}")
 
     _write_csv(RESULT_DIR / "codec_comparison.csv",
-               ["codec", "archive_kb", "psnr", "ssim", "lpips"], rows)
+               ["codec", "archive_kb", "psnr", "ssim", "ms_ssim", "lpips"], rows)
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -212,52 +212,17 @@ def stage_compress(input_video: Path, pipeline_cfg: dict):
 
 def stage_decompress(archive_bytes: bytes, pipeline_cfg: dict):
     """Returns (frames, fps, width, height, detections)."""
-    import io, json as _json, os, shutil, subprocess, tempfile, zipfile
+    import os
+    from src.decompression.reconstruct import decompress_archive_bytes
 
-    _status("decompress — DCVC decode ...")
-
-    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as arc:
-        roi_json = _json.loads(arc.read("roi_detections.json"))
-    detections = {int(k): v for k, v in (roi_json.get("frames", {}) or {}).items()}
-
-    tmpdir = tempfile.mkdtemp(prefix="pipeline_decomp_")
-    archive_path  = os.path.join(tmpdir, "archive.zip")
-    out_path      = os.path.join(tmpdir, "decompressed.mp4")
-    dec_cfg_path  = os.path.join(tmpdir, "decompression.yaml")
-
-    with open(archive_path, "wb") as f:
-        f.write(archive_bytes)
-
-    import yaml as _yaml
+    _status("decompress — decode ...")
     dec_sub = _merge_sub_config(pipeline_cfg, "decompression")
-    with open(dec_cfg_path, "w") as f:
-        _yaml.dump({"decompression": dec_sub}, f)
-
-    try:
-        subprocess.run(
-            [sys.executable, str(ROOT / "run_decompression.py"),
-             archive_path,           # positional argument
-             "--config",  dec_cfg_path,
-             "--output",  out_path,
-             "--no-interpolate"],    # AMT model not required; restore stage handles quality
-            check=True,
-        )
-        cap = cv2.VideoCapture(out_path)
-        fps    = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-        width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frames = []
-        while True:
-            ok, frm = cap.read()
-            if not ok:
-                break
-            frames.append(frm)
-        cap.release()
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
+    frames, fps, width, height, roi_json = decompress_archive_bytes(
+        archive_bytes, dec_sub, no_interpolate=True, strict_gpu=False,
+    )
+    detections = {int(k): v for k, v in (roi_json.get("frames", {}) or {}).items()}
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-    _status(f"  {len(frames)} frames @ {fps:.1f} fps  {width}×{height}")
+    _status(f"  {len(frames)} frames @ {fps:.1f} fps  {width}x{height}")
     return frames, fps, width, height, detections
 
 

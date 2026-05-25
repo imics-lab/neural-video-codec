@@ -142,72 +142,191 @@ class _LPIPSCalc:
         return float(val.item())
 
 
+class _MSSSIMCalc:
+    """Lazy-loaded MS-SSIM calculator using pytorch-msssim."""
+
+    def __init__(self) -> None:
+        self._fn = None
+        self._device = None
+
+    def _init(self) -> bool:
+        if self._fn is not None:
+            return True
+        try:
+            import torch
+            from pytorch_msssim import ms_ssim  # noqa: F401
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._fn = ms_ssim
+            return True
+        except ImportError:
+            return False
+
+    def __call__(self, pred: np.ndarray, gt: np.ndarray) -> Optional[float]:
+        if not self._init():
+            return None
+        import torch
+        def to_tensor(img: np.ndarray) -> "torch.Tensor":
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            return torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).to(self._device)
+        with torch.no_grad():
+            val = self._fn(to_tensor(pred), to_tensor(gt), data_range=1.0, size_average=True)
+        return float(val.item())
+
+
+def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
+                fps: float = 30.0) -> Optional[float]:
+    """
+    Compute mean VMAF score using ffmpeg libvmaf. Returns None if ffmpeg-vmaf is unavailable.
+    Writes frames to temp lossless files, calls ffmpeg, parses JSON output.
+    """
+    import json as _json
+    import subprocess
+    import tempfile
+
+    n = min(len(pred_frames), len(gt_frames))
+    if n == 0:
+        return None
+
+    h, w = gt_frames[0].shape[:2]
+
+    def _write_rawvideo(frames: List[np.ndarray], path: str) -> None:
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s:v", f"{w}x{h}", "-r", str(fps),
+            "-i", "-",
+            "-c:v", "ffv1", "-level", "3", path,
+        ]
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for f in frames[:n]:
+            proc.stdin.write(f.tobytes())
+        proc.stdin.close()
+        proc.wait()
+
+    with tempfile.TemporaryDirectory(prefix="vmaf_") as td:
+        pred_path = f"{td}/pred.mkv"
+        gt_path   = f"{td}/gt.mkv"
+        log_path  = f"{td}/vmaf.json"
+        _write_rawvideo(pred_frames, pred_path)
+        _write_rawvideo(gt_frames,   gt_path)
+
+        vmaf_filter = f"libvmaf=log_path={log_path}:log_fmt=json:n_threads=4"
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", pred_path, "-i", gt_path,
+            "-filter_complex", f"[0:v][1:v]{vmaf_filter}",
+            "-f", "null", "-",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=300)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if result.returncode != 0:
+            return None
+
+        try:
+            with open(log_path) as f:
+                data = _json.load(f)
+            frames_data = data.get("frames", [])
+            if frames_data:
+                scores = [frm["metrics"]["vmaf"] for frm in frames_data
+                          if "vmaf" in frm.get("metrics", {})]
+                if scores:
+                    return float(np.mean(scores))
+            # fallback: pooled mean from top-level
+            return float(data.get("pooled_metrics", {}).get("vmaf", {}).get("mean", float("nan")))
+        except Exception:
+            return None
+
+
 # ── Main evaluation ───────────────────────────────────────────────────────────
 
 def evaluate(
     pred_frames: List[np.ndarray],
     gt_frames:   List[np.ndarray],
     verbose: bool = False,
+    compute_vmaf: bool = True,
+    fps: float = 30.0,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     n = min(len(pred_frames), len(gt_frames))
     if n == 0:
         raise ValueError("No frames to evaluate.")
 
-    lpips_calc = _LPIPSCalc()
+    lpips_calc  = _LPIPSCalc()
+    msssim_calc = _MSSSIMCalc()
     rows: List[Dict[str, Any]] = []
 
     for i in range(n):
         pred = pred_frames[i]
         gt   = gt_frames[i]
 
-        # Resize pred to match gt if needed
         if pred.shape[:2] != gt.shape[:2]:
             pred = cv2.resize(pred, (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_AREA)
 
         row: Dict[str, Any] = {
-            "frame": i,
-            "psnr":  _psnr(pred, gt),
-            "ssim":  _ssim(pred, gt),
+            "frame":   i,
+            "psnr":    _psnr(pred, gt),
+            "ssim":    _ssim(pred, gt),
         }
+        ms = msssim_calc(pred, gt)
+        row["ms_ssim"] = ms if ms is not None else float("nan")
         lp = lpips_calc(pred, gt)
-        row["lpips"] = lp if lp is not None else float("nan")
+        row["lpips"]   = lp if lp is not None else float("nan")
 
         rows.append(row)
         if verbose:
             LOGGER.debug(
-                f"Frame {i:5d}  PSNR={row['psnr']:.2f}  "
-                f"SSIM={row['ssim']:.4f}  LPIPS={row['lpips']:.4f}"
+                f"Frame {i:5d}  PSNR={row['psnr']:.2f}  SSIM={row['ssim']:.4f}  "
+                f"MS-SSIM={row['ms_ssim']:.4f}  LPIPS={row['lpips']:.4f}"
             )
 
-    # Aggregate
-    agg: Dict[str, Any] = {
-        "n_frames":   n,
-        "psnr_mean":  float(np.mean([r["psnr"]  for r in rows])),
-        "psnr_std":   float(np.std( [r["psnr"]  for r in rows])),
-        "ssim_mean":  float(np.mean([r["ssim"]  for r in rows])),
-        "ssim_std":   float(np.std( [r["ssim"]  for r in rows])),
-    }
-    lpips_vals = [r["lpips"] for r in rows if not np.isnan(r["lpips"])]
-    if lpips_vals:
-        agg["lpips_mean"] = float(np.mean(lpips_vals))
-        agg["lpips_std"]  = float(np.std(lpips_vals))
-    else:
-        agg["lpips_mean"] = float("nan")
-        agg["lpips_std"]  = float("nan")
+    def _agg(key: str) -> Tuple[float, float]:
+        vals = [r[key] for r in rows if not np.isnan(r[key])]
+        if not vals:
+            return float("nan"), float("nan")
+        return float(np.mean(vals)), float(np.std(vals))
 
+    psnr_m,    psnr_s    = _agg("psnr")
+    ssim_m,    ssim_s    = _agg("ssim")
+    ms_ssim_m, ms_ssim_s = _agg("ms_ssim")
+    lpips_m,   lpips_s   = _agg("lpips")
+
+    vmaf_mean = float("nan")
+    if compute_vmaf:
+        v = _vmaf_video(pred_frames, gt_frames, fps=fps)
+        if v is not None:
+            vmaf_mean = v
+
+    agg: Dict[str, Any] = {
+        "n_frames":    n,
+        "psnr_mean":   psnr_m,    "psnr_std":    psnr_s,
+        "ssim_mean":   ssim_m,    "ssim_std":    ssim_s,
+        "ms_ssim_mean": ms_ssim_m, "ms_ssim_std": ms_ssim_s,
+        "lpips_mean":  lpips_m,   "lpips_std":   lpips_s,
+        "vmaf_mean":   vmaf_mean,
+    }
     return rows, agg
 
 
 def _print_table(agg: Dict[str, Any]) -> None:
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 56)
     print(f"  Frames evaluated : {agg['n_frames']}")
-    print(f"  PSNR  (dB)       : {agg['psnr_mean']:.2f} ± {agg['psnr_std']:.2f}")
-    print(f"  SSIM             : {agg['ssim_mean']:.4f} ± {agg['ssim_std']:.4f}")
-    if not np.isnan(agg["lpips_mean"]):
-        print(f"  LPIPS ↓          : {agg['lpips_mean']:.4f} ± {agg['lpips_std']:.4f}")
+    print(f"  PSNR  (dB)  ^    : {agg['psnr_mean']:.2f} +/- {agg['psnr_std']:.2f}")
+    print(f"  SSIM        ^    : {agg['ssim_mean']:.4f} +/- {agg['ssim_std']:.4f}")
+    if not np.isnan(agg.get("ms_ssim_mean", float("nan"))):
+        print(f"  MS-SSIM     ^    : {agg['ms_ssim_mean']:.4f} +/- {agg['ms_ssim_std']:.4f}")
+    else:
+        print("  MS-SSIM          : N/A (pytorch-msssim not installed)")
+    if not np.isnan(agg.get("lpips_mean", float("nan"))):
+        print(f"  LPIPS       v    : {agg['lpips_mean']:.4f} +/- {agg['lpips_std']:.4f}")
     else:
         print("  LPIPS            : N/A (lpips package not installed)")
-    print("=" * 50 + "\n")
+    if not np.isnan(agg.get("vmaf_mean", float("nan"))):
+        print(f"  VMAF        ^    : {agg['vmaf_mean']:.2f}")
+    else:
+        print("  VMAF             : N/A (ffmpeg-vmaf not available)")
+    print("=" * 56 + "\n")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -218,6 +337,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--gt",         required=True, help="Ground-truth video or frame dir")
     p.add_argument("--out-csv",    default=None,  help="Save per-frame CSV to this path")
     p.add_argument("--max-frames", type=int,      default=None)
+    p.add_argument("--fps",        type=float,    default=30.0,
+                   help="Frame rate for VMAF temporal modeling (default: 30)")
+    p.add_argument("--no-vmaf",    action="store_true",
+                   help="Skip VMAF (faster; use when ffmpeg-vmaf is unavailable)")
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
 
@@ -232,17 +355,19 @@ def main() -> int:
     gt_frames   = _load_frames(args.gt,   args.max_frames)
 
     print(f"Evaluating {min(len(pred_frames), len(gt_frames))} frames ...")
-    rows, agg = evaluate(pred_frames, gt_frames, verbose=args.verbose)
+    rows, agg = evaluate(pred_frames, gt_frames, verbose=args.verbose,
+                         compute_vmaf=not args.no_vmaf, fps=args.fps)
     _print_table(agg)
 
     if args.out_csv:
         out = Path(args.out_csv)
         out.parent.mkdir(parents=True, exist_ok=True)
         with open(out, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["frame", "psnr", "ssim", "lpips"])
+            writer = csv.DictWriter(f,
+                fieldnames=["frame", "psnr", "ssim", "ms_ssim", "lpips"])
             writer.writeheader()
             writer.writerows(rows)
-        print(f"Per-frame CSV saved → {out}")
+        print(f"Per-frame CSV saved -> {out}")
 
     return 0
 
