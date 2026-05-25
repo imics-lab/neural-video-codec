@@ -152,7 +152,7 @@ def _archive_kb(cfg_path: Path) -> float:
     tmp = OUT_DIR / "_size_probe.zip"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     _run(_py("run_compression.py",
-             "--video", GT_VIDEO, "--config", cfg_path, "--output", tmp))
+             GT_VIDEO, "--config", cfg_path, "--output", tmp))
     if DRY_RUN:
         return 0.0
     size = tmp.stat().st_size / 1024.0
