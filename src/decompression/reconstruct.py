@@ -637,6 +637,9 @@ def decompress_archive(
         roi_decode_limit = max(1, sum(1 for idx in roi_indices_raw if int(idx) < max_frames))
         bg_decode_limit = max(1, sum(1 for idx in bg_indices_raw if int(idx) < max_frames))
 
+    writer = None
+    lossless_writer: Optional[_LosslessEvalWriter] = None
+    lossless_yuv420_writer: Optional[_LosslessYuv420Writer] = None
     decode_tmp_dir = Path(tempfile.mkdtemp(prefix="decomp_decode_"))
     try:
         roi_store, roi_frame_count, bg_store, bg_frame_count = decode_roi_bg_streams_to_memmap(
@@ -692,9 +695,6 @@ def decompress_archive(
             roi_interpolator, _ = rd._init_amt_interpolator(interp_cfg)
             roi_mode = "amt"
 
-        writer = None
-        lossless_writer: Optional[_LosslessEvalWriter] = None
-        lossless_yuv420_writer: Optional[_LosslessYuv420Writer] = None
         if output_path is not None:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
