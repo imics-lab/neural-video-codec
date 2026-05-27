@@ -623,16 +623,49 @@ def decode_roi_bg_streams_to_memmap(
     max_frames_roi: Optional[int] = None,
     max_frames_bg: Optional[int] = None,
 ) -> Tuple[np.memmap, int, np.memmap, int]:
-    dcvc_cfg = meta.get("dcvc", {}) or {}
     video_info = meta.get("video", {}) or {}
-    streams = meta.get("streams", {}) or {}
-    roi_stream_meta = streams.get("roi", {}) or {}
-    bg_stream_meta = streams.get("bg", {}) or {}
-
-    width = int(video_info.get("width", 0) or 0)
+    width  = int(video_info.get("width",  0) or 0)
     height = int(video_info.get("height", 0) or 0)
     if width <= 0 or height <= 0:
         raise RuntimeError("Invalid video width/height in archive metadata")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    roi_path = work_dir / "roi_frames.npy"
+    bg_path  = work_dir / "bg_frames.npy"
+
+    codec = str(meta.get("codec", "dcvc")).lower()
+    if codec != "dcvc":
+        # Non-DCVC: decode all frames via the dispatching helper, then write to memmap.
+        roi_list, bg_list = decode_roi_bg_streams(
+            roi_bin_bytes, bg_bin_bytes, meta,
+            progress_cb_roi=progress_cb_roi, progress_cb_bg=progress_cb_bg,
+            max_frames_roi=max_frames_roi, max_frames_bg=max_frames_bg,
+        )
+        if not roi_list or not bg_list:
+            raise RuntimeError(f"{codec} decoder returned 0 ROI/BG frames")
+        roi_map = np.lib.format.open_memmap(
+            roi_path, mode="w+", dtype=np.uint8,
+            shape=(len(roi_list), height, width, 3),
+        )
+        bg_map = np.lib.format.open_memmap(
+            bg_path, mode="w+", dtype=np.uint8,
+            shape=(len(bg_list), height, width, 3),
+        )
+        for i, f in enumerate(roi_list):
+            roi_map[i] = f if f.shape[:2] == (height, width) \
+                else cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+        for i, f in enumerate(bg_list):
+            bg_map[i] = f if f.shape[:2] == (height, width) \
+                else cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+        roi_map.flush()
+        bg_map.flush()
+        return roi_map, len(roi_list), bg_map, len(bg_list)
+
+    # DCVC path: stream frames directly into memmap via consumer callbacks.
+    dcvc_cfg = meta.get("dcvc", {}) or {}
+    streams = meta.get("streams", {}) or {}
+    roi_stream_meta = streams.get("roi", {}) or {}
+    bg_stream_meta  = streams.get("bg",  {}) or {}
 
     roi_count_hint = roi_stream_meta.get("frames_encoded", None)
     if roi_count_hint is None and isinstance(roi_stream_meta.get("frame_index_map", None), list):
@@ -642,28 +675,21 @@ def decode_roi_bg_streams_to_memmap(
         bg_count_hint = len(bg_stream_meta.get("frame_index_map", []))
 
     roi_hint = _resolve_hint(roi_count_hint, max_frames_roi)
-    bg_hint = _resolve_hint(bg_count_hint, max_frames_bg)
+    bg_hint  = _resolve_hint(bg_count_hint,  max_frames_bg)
     if roi_hint is None or bg_hint is None:
         raise RuntimeError("Archive is missing ROI/BG frame count hints required for low-memory decode.")
 
-    work_dir.mkdir(parents=True, exist_ok=True)
-    roi_path = work_dir / "roi_frames.npy"
-    bg_path = work_dir / "bg_frames.npy"
     roi_map = np.lib.format.open_memmap(
-        roi_path,
-        mode="w+",
-        dtype=np.uint8,
+        roi_path, mode="w+", dtype=np.uint8,
         shape=(int(roi_hint), int(height), int(width), 3),
     )
     bg_map = np.lib.format.open_memmap(
-        bg_path,
-        mode="w+",
-        dtype=np.uint8,
+        bg_path, mode="w+", dtype=np.uint8,
         shape=(int(bg_hint), int(height), int(width), 3),
     )
 
     roi_written = 0
-    bg_written = 0
+    bg_written  = 0
 
     def _consume_roi(frame: np.ndarray) -> None:
         nonlocal roi_written
@@ -680,20 +706,12 @@ def decode_roi_bg_streams_to_memmap(
         bg_written += 1
 
     _decode_stream_bytes_dcvc(
-        roi_bin_bytes,
-        dcvc_cfg,
-        video_info,
-        frame_count_hint=roi_hint,
-        progress_cb=progress_cb_roi,
-        frame_consumer=_consume_roi,
+        roi_bin_bytes, dcvc_cfg, video_info,
+        frame_count_hint=roi_hint, progress_cb=progress_cb_roi, frame_consumer=_consume_roi,
     )
     _decode_stream_bytes_dcvc(
-        bg_bin_bytes,
-        dcvc_cfg,
-        video_info,
-        frame_count_hint=bg_hint,
-        progress_cb=progress_cb_bg,
-        frame_consumer=_consume_bg,
+        bg_bin_bytes, dcvc_cfg, video_info,
+        frame_count_hint=bg_hint, progress_cb=progress_cb_bg, frame_consumer=_consume_bg,
     )
     roi_map.flush()
     bg_map.flush()
