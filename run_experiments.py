@@ -355,7 +355,6 @@ def exp_rd_baselines() -> None:
         print(f"\n-- DCVC uniform QP={uniform_qp} --")
         cfg = copy.deepcopy(_load_yaml(COMPRESS_CFG))
         _set_qp(cfg, roi_qp=uniform_qp, bg_qp=uniform_qp)
-        cfg.setdefault("roi_detection", {})["enable"] = False
         tmp = _write_tmp_cfg(cfg)
         out = OUT_DIR / f"dcvc_uniform_qp{uniform_qp}.mp4"
         try:
