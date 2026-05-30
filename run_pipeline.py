@@ -113,6 +113,27 @@ def _save_video(frames: List[np.ndarray], path: Path, fps: float) -> None:
     assemble_video(iter(frames), path, fps=fps)
 
 
+def _save_video_lossless(frames: List[np.ndarray], path: Path, fps: float) -> None:
+    """Save frames as lossless FFV1 MKV via ffmpeg. Suitable for lossless intermediates."""
+    import subprocess
+    path.parent.mkdir(parents=True, exist_ok=True)
+    h, w = frames[0].shape[:2]
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s:v", f"{w}x{h}", "-r", str(max(1e-6, fps)), "-i", "-",
+        "-an", "-c:v", "ffv1", "-level", "3", str(path),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for f in frames:
+        proc.stdin.write(f.tobytes())
+    proc.stdin.close()
+    rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError(f"Lossless FFV1 save failed (exit {rc}): {path}")
+
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
@@ -143,6 +164,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Override restoration ddim_steps (e.g. 1 3 6 10 20)")
     p.add_argument("--restore-config", default=None,
                    help="Override restoration sub-config path (e.g. configs/gpu/restoration_T1.yaml)")
+    p.add_argument("--lossless",   action="store_true",
+                   help="Save final output as lossless FFV1 MKV instead of MP4")
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
 
@@ -504,7 +527,10 @@ def main() -> int:
 
     # ── Write final output ────────────────────────────────────────────────────
     if frames:
-        _save_video(frames, final_out, fps)
+        if args.lossless:
+            _save_video_lossless(frames, final_out, fps)
+        else:
+            _save_video(frames, final_out, fps)
         _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s → {final_out}")
     else:
         _status(f"Pipeline complete in {time.perf_counter()-t0:.1f}s (compress-only, no video output)")

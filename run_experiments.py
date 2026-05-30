@@ -190,7 +190,8 @@ def _write_csv(path: Path, fieldnames: List[str], rows: List[Dict]) -> None:
 def _pipeline(stages: List[str], output: Path, cfg: Path, *,
               input_video: Optional[Path] = None,
               restore_config: Optional[Path] = None,
-              ddim_steps: Optional[int] = None) -> None:
+              ddim_steps: Optional[int] = None,
+              lossless: bool = False) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     cmd = _py("run_pipeline.py",
               "--video" if input_video is None else "--input",
@@ -202,6 +203,8 @@ def _pipeline(stages: List[str], output: Path, cfg: Path, *,
         cmd += ["--restore-config", str(restore_config)]
     if ddim_steps is not None:
         cmd += ["--ddim-steps", str(ddim_steps)]
+    if lossless:
+        cmd += ["--lossless"]
     _run(cmd)
 
 
@@ -271,10 +274,10 @@ def exp_ddim_ablation() -> None:
     """
     print("\n=== DDIM ablation ===")
 
-    decomp_video = OUT_DIR / "ddim_decomp_base.mp4"
+    decomp_video = OUT_DIR / "ddim_decomp_base.mkv"
     if not decomp_video.exists() or DRY_RUN:
         print("\n-- compress + decompress (base) --")
-        _pipeline(["compress", "decompress"], decomp_video, COMPRESS_CFG)
+        _pipeline(["compress", "decompress"], decomp_video, COMPRESS_CFG, lossless=True)
 
     rows = []
     for d in [1, 3, 6, 10, 20]:
@@ -301,10 +304,10 @@ def exp_temporal_ablation() -> None:
     """
     print("\n=== Temporal ablation ===")
 
-    decomp_video = OUT_DIR / "ddim_decomp_base.mp4"
+    decomp_video = OUT_DIR / "ddim_decomp_base.mkv"
     if not decomp_video.exists() or DRY_RUN:
         print("\n-- compress + decompress (base) --")
-        _pipeline(["compress", "decompress"], decomp_video, COMPRESS_CFG)
+        _pipeline(["compress", "decompress"], decomp_video, COMPRESS_CFG, lossless=True)
 
     rows = []
     for T in [1, 3, 5]:
