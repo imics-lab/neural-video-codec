@@ -39,6 +39,7 @@ def decode_ffmpeg_stream_bytes(
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", in_path,
+            "-vf", f"scale={int(width)}:{int(height)}",
             "-f", "rawvideo",
             "-pixel_format", "bgr24",
             "pipe:1",
