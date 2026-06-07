@@ -409,8 +409,14 @@ def exp_codec_comparison() -> None:
         for k, v in extra_cfg.items():
             base_cfg["compression"].setdefault(k, {}).update(v)
         tmp = _write_tmp_cfg(base_cfg)
-        out = OUT_DIR / f"codec_{codec}.mp4"
+        out      = OUT_DIR / f"codec_{codec}.mp4"
+        decomp_out = OUT_DIR / f"codec_{codec}_decomp_only.mp4"
         try:
+            _pipeline(["compress", "decompress"], decomp_out, tmp)
+            m_decomp = _eval_metrics(decomp_out, RESULT_DIR / f"codec_{codec}_decomp.csv")
+            print(f"  {codec:6s}  decomp-only PSNR={m_decomp['psnr']:.2f}  "
+                  f"SSIM={m_decomp['ssim']:.4f}")
+
             _pipeline(["compress", "decompress", "restore"], out, tmp)
             m  = _eval_metrics(out, RESULT_DIR / f"codec_{codec}.csv")
             kb = _archive_kb(tmp)
