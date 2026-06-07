@@ -59,6 +59,7 @@ VALID_STAGES = [
     "upscale-bicubic",
     "upscale-s3diff",
     "upscale-osediff",
+    "upscale-pid",
     "upscale-wan",
     "upscale-cogvideo",
 ]
@@ -355,6 +356,17 @@ def stage_upscale_osediff(frames, out_w: int, out_h: int, pipeline_cfg: dict,
     return upscaler.upscale_sequence(frames, detections=detections)
 
 
+def stage_upscale_pid(frames, out_w: int, out_h: int, pipeline_cfg: dict,
+                      detections: dict = None):
+    _status(f"upscale-pid — PiD pixel diffusion -> {out_w}x{out_h} ...")
+    from src.upscaling.pid_upscaler import PiDUpscaler
+    pid_cfg = dict(pipeline_cfg.get("pid_upscaling", {}) or {})
+    pid_cfg.setdefault("out_w", out_w)
+    pid_cfg.setdefault("out_h", out_h)
+    upscaler = PiDUpscaler(pid_cfg)
+    return upscaler.upscale_sequence(frames, detections=detections)
+
+
 def stage_upscale_cogvideo(frames, out_w: int, out_h: int, pipeline_cfg: dict,
                            detections: dict = None):
     _status(f"upscale-cogvideo — CogVideoX V2V → {out_w}×{out_h} ...")
@@ -515,6 +527,10 @@ def main() -> int:
         elif stage == "upscale-osediff":
             frames = stage_upscale_osediff(frames, out_w, out_h, pipeline_cfg,
                                            detections=detections)
+
+        elif stage == "upscale-pid":
+            frames = stage_upscale_pid(frames, out_w, out_h, pipeline_cfg,
+                                       detections=detections)
 
         elif stage == "upscale-wan":
             frames = stage_upscale_wan(frames, out_w, out_h, pipeline_cfg)
