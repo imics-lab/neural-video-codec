@@ -631,6 +631,12 @@ def decompress_archive(
 
     roi_indices_raw = rd._pick_stream_indices(frame_drop_json, meta, "roi")
     bg_indices_raw = rd._pick_stream_indices(frame_drop_json, meta, "bg")
+    _codec_dbg = str(meta.get("codec", "dcvc")).lower()
+    if _codec_dbg != "dcvc":
+        print(f"[decomp] {_codec_dbg}: roi_indices len={len(roi_indices_raw)}"
+              f" first5={roi_indices_raw[:5]} last5={roi_indices_raw[-5:]}", flush=True)
+        print(f"[decomp] {_codec_dbg}: bg_indices  len={len(bg_indices_raw)}"
+              f" first5={bg_indices_raw[:5]} last5={bg_indices_raw[-5:]}", flush=True)
     roi_decode_limit: Optional[int] = None
     bg_decode_limit: Optional[int] = None
     if int(max_frames) > 0:
