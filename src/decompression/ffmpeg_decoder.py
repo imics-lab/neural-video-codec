@@ -42,7 +42,7 @@ def decode_ffmpeg_stream_bytes(
             "-i", in_path,
             "-vf", f"scale={int(width)}:{int(height)}",
             "-f", "rawvideo",
-            "-pixel_format", "bgr24",
+            "-pix_fmt", "bgr24",
             "pipe:1",
         ]
         with open(err_path, "wb") as err_f:
