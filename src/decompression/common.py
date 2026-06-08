@@ -211,12 +211,20 @@ def _resolve_output_path(archive_path: Path, dec_cfg: Dict[str, Any], meta: Opti
 
 
 def _pick_stream_indices(frame_drop_json: Dict[str, Any], meta: Dict[str, Any], stream: str) -> List[int]:
+    codec = str(meta.get("codec", "dcvc")).lower()
     stream_meta = (meta.get("streams", {}) or {}).get(stream, {}) or {}
     m = stream_meta.get("frame_index_map", None)
+    if codec != "dcvc":
+        print(f"[decomp] {codec}: _pick_stream_indices({stream}): "
+              f"meta frame_index_map={'absent' if m is None else f'len={len(m)} first3={list(m)[:3]}'} "
+              f"frames_encoded={stream_meta.get('frames_encoded', 'absent')}", flush=True)
     if isinstance(m, list) and m:
         return [int(x) for x in m]
     key = "roi_kept_frames" if stream == "roi" else "bg_kept_frames"
     arr = frame_drop_json.get(key, None)
+    if codec != "dcvc":
+        print(f"[decomp] {codec}: _pick_stream_indices({stream}): "
+              f"falling back to frame_drop_json[{key!r}] len={len(arr) if isinstance(arr, list) else 'absent'}", flush=True)
     if isinstance(arr, list) and arr:
         return [int(x) for x in arr]
     return []
