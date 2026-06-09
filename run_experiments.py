@@ -108,29 +108,40 @@ def _set_qp(cfg: Dict[str, Any], roi_qp: int, bg_qp: int) -> None:
 # ── Metric helpers ────────────────────────────────────────────────────────────
 
 def _eval_metrics(pred: Path, csv_out: Path, *, vmaf: bool = False) -> Dict[str, float]:
+    import json as _json
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    cmd = _py("eval_metrics.py", "--pred", pred, "--gt", GT_VIDEO, "--out-csv", csv_out)
+    agg_out = csv_out.with_suffix(".agg.json")
+    cmd = _py("eval_metrics.py", "--pred", pred, "--gt", GT_VIDEO,
+              "--out-csv", csv_out, "--agg-out", agg_out)
     if not vmaf:
         cmd += ["--no-vmaf"]
     _run(cmd)
     if DRY_RUN:
-        return {"psnr": 0.0, "ssim": 0.0, "ms_ssim": 0.0, "lpips": 0.0}
+        return {"psnr": 0.0, "ssim": 0.0, "ms_ssim": 0.0, "lpips": 0.0, "vmaf": float("nan")}
     rows = list(csv.DictReader(open(csv_out)))
     if not rows:
         nan = float("nan")
-        return {"psnr": nan, "ssim": nan, "ms_ssim": nan, "lpips": nan}
+        return {"psnr": nan, "ssim": nan, "ms_ssim": nan, "lpips": nan, "vmaf": nan}
 
     def _mean(key: str) -> float:
         vals = [float(r[key]) for r in rows
                 if r.get(key, "nan") not in ("nan", "", None)]
         return float(np.mean(vals)) if vals else float("nan")
 
-    return {
+    result = {
         "psnr":    _mean("psnr"),
         "ssim":    _mean("ssim"),
         "ms_ssim": _mean("ms_ssim"),
         "lpips":   _mean("lpips"),
+        "vmaf":    float("nan"),
     }
+    if agg_out.exists():
+        try:
+            agg = _json.loads(agg_out.read_text())
+            result["vmaf"] = float(agg.get("vmaf_mean", float("nan")))
+        except Exception:
+            pass
+    return result
 
 
 def _eval_temporal(video: Path) -> float:
@@ -228,15 +239,16 @@ def exp_stage_ablation() -> None:
 
     rows = []
     for label, video in [("decomp", decomp_video), ("restored", restored_video)]:
-        m  = _eval_metrics(video, RESULT_DIR / f"stage_{label}.csv")
+        m  = _eval_metrics(video, RESULT_DIR / f"stage_{label}.csv", vmaf=True)
         we = _eval_temporal(video)
         row = {"stage": label, **m, "warp_err_1e4": round(we, 4)}
         rows.append(row)
+        vmaf_str = f"  VMAF={m['vmaf']:.2f}" if not np.isnan(m['vmaf']) else ""
         print(f"  {label:12s}  PSNR={m['psnr']:.2f}  SSIM={m['ssim']:.4f}  "
-              f"MS-SSIM={m['ms_ssim']:.4f}  LPIPS={m['lpips']:.4f}  WE={we:.4f}")
+              f"MS-SSIM={m['ms_ssim']:.4f}  LPIPS={m['lpips']:.4f}  WE={we:.4f}{vmaf_str}")
 
     _write_csv(RESULT_DIR / "stage_ablation.csv",
-               ["stage", "psnr", "ssim", "ms_ssim", "lpips", "warp_err_1e4"], rows)
+               ["stage", "psnr", "ssim", "ms_ssim", "lpips", "vmaf", "warp_err_1e4"], rows)
 
 
 def exp_qp_sweep() -> None:
@@ -418,17 +430,18 @@ def exp_codec_comparison() -> None:
                   f"SSIM={m_decomp['ssim']:.4f}")
 
             _pipeline(["compress", "decompress", "restore"], out, tmp)
-            m  = _eval_metrics(out, RESULT_DIR / f"codec_{codec}.csv")
+            m  = _eval_metrics(out, RESULT_DIR / f"codec_{codec}.csv", vmaf=True)
             kb = _archive_kb(tmp)
         finally:
             tmp.unlink(missing_ok=True)
         row = {"codec": codec, "archive_kb": round(kb, 1), **m}
         rows.append(row)
+        vmaf_str = f"  VMAF={m['vmaf']:.2f}" if not np.isnan(m['vmaf']) else ""
         print(f"  {codec:6s}  {kb:.0f} KB  PSNR={m['psnr']:.2f}  "
-              f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}")
+              f"SSIM={m['ssim']:.4f}  LPIPS={m['lpips']:.4f}{vmaf_str}")
 
     _write_csv(RESULT_DIR / "codec_comparison.csv",
-               ["codec", "archive_kb", "psnr", "ssim", "ms_ssim", "lpips"], rows)
+               ["codec", "archive_kb", "psnr", "ssim", "ms_ssim", "lpips", "vmaf"], rows)
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -392,11 +392,14 @@ def _parse_args() -> argparse.Namespace:
                    help="Frame rate for VMAF temporal modeling (default: 30)")
     p.add_argument("--no-vmaf",    action="store_true",
                    help="Skip VMAF (faster; use when ffmpeg-vmaf is unavailable)")
+    p.add_argument("--agg-out",    default=None,
+                   help="Save aggregate metrics (including VMAF) as JSON to this path")
     p.add_argument("--verbose",    action="store_true")
     return p.parse_args()
 
 
 def main() -> int:
+    import json as _json
     args = _parse_args()
     _setup_logging(args.verbose)
 
@@ -419,6 +422,12 @@ def main() -> int:
             writer.writeheader()
             writer.writerows(rows)
         print(f"Per-frame CSV saved -> {out}")
+
+    if args.agg_out:
+        out = Path(args.agg_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w") as f:
+            _json.dump(agg, f)
 
     return 0
 
