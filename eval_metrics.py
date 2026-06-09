@@ -224,22 +224,7 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
 
     h, w = gt_frames[0].shape[:2]
 
-    def _write_lossless_mkv(frames: List[np.ndarray], path: str) -> None:
-        cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "bgr24",
-            "-s:v", f"{w}x{h}", "-r", str(fps),
-            "-i", "-",
-            "-c:v", "ffv1", "-level", "3", path,
-        ]
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for f in frames[:n]:
-            proc.stdin.write(f.tobytes())
-        proc.stdin.close()
-        proc.wait()
-
-    def _write_y4m(frames: List[np.ndarray], path: str) -> None:
+    def _write_y4m(frames: List[np.ndarray], path: str) -> bool:
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
@@ -252,20 +237,21 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
         for f in frames[:n]:
             proc.stdin.write(f.tobytes())
         proc.stdin.close()
-        proc.wait()
+        return proc.wait() == 0
 
     with tempfile.TemporaryDirectory(prefix="vmaf_") as td:
-        log_path = f"{td}/vmaf.json"
+        log_path  = f"{td}/vmaf.json"
+        pred_y4m  = f"{td}/pred.y4m"
+        gt_y4m    = f"{td}/gt.y4m"
+
+        if not _write_y4m(pred_frames, pred_y4m) or not _write_y4m(gt_frames, gt_y4m):
+            return None
 
         # Try ffmpeg libvmaf.
-        pred_mkv = f"{td}/pred.mkv"
-        gt_mkv   = f"{td}/gt.mkv"
-        _write_lossless_mkv(pred_frames, pred_mkv)
-        _write_lossless_mkv(gt_frames,   gt_mkv)
         vmaf_filter = f"libvmaf=log_path={log_path}:log_fmt=json:n_threads=4"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", pred_mkv, "-i", gt_mkv,
+            "-i", pred_y4m, "-i", gt_y4m,
             "-filter_complex", f"[0:v][1:v]{vmaf_filter}",
             "-f", "null", "-",
         ]
@@ -284,13 +270,8 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
             return None
 
         model_path = _find_vmaf_model()
-        # v3+ static binaries bundle models; use version= reference when no file found.
         model_arg = f"path={model_path}" if model_path else "version=vmaf_v0.6.1"
 
-        pred_y4m = f"{td}/pred.y4m"
-        gt_y4m   = f"{td}/gt.y4m"
-        _write_y4m(pred_frames, pred_y4m)
-        _write_y4m(gt_frames,   gt_y4m)
         cmd = [
             vmaf_bin,
             "--reference",  gt_y4m,
