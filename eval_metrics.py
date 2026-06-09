@@ -278,11 +278,14 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
-        # Fall back to standalone vmaf CLI (libvmaf package).
+        # Fall back to standalone vmaf CLI (libvmaf package or static binary).
         vmaf_bin = shutil.which("vmaf")
-        model_path = _find_vmaf_model()
-        if vmaf_bin is None or model_path is None:
+        if vmaf_bin is None:
             return None
+
+        model_path = _find_vmaf_model()
+        # v3+ static binaries bundle models; use version= reference when no file found.
+        model_arg = f"path={model_path}" if model_path else "version=vmaf_v0.6.1"
 
         pred_y4m = f"{td}/pred.y4m"
         gt_y4m   = f"{td}/gt.y4m"
@@ -292,7 +295,7 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
             vmaf_bin,
             "--reference",  gt_y4m,
             "--distorted",  pred_y4m,
-            "--model",      f"path={model_path}",
+            "--model",      model_arg,
             "--output",     log_path,
             "--json",
             "--threads",    "4",
