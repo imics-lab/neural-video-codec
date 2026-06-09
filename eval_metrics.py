@@ -173,13 +173,48 @@ class _MSSSIMCalc:
         return float(val.item())
 
 
+def _find_vmaf_model() -> Optional[str]:
+    import os
+    import shutil
+    vmaf_bin = shutil.which("vmaf")
+    search_roots = []
+    if vmaf_bin:
+        search_roots.append(Path(vmaf_bin).parent.parent)
+    conda_prefix = os.environ.get("CONDA_PREFIX", "")
+    if conda_prefix:
+        search_roots.append(Path(conda_prefix))
+    for root in search_roots:
+        model_dir = root / "share" / "model"
+        for name in ("vmaf_v0.6.1.json", "vmaf_4k_v0.6.1.json", "vmaf_b_v0.6.3.json"):
+            p = model_dir / name
+            if p.exists():
+                return str(p)
+    return None
+
+
+def _parse_vmaf_json(log_path: str) -> Optional[float]:
+    import json as _json
+    try:
+        with open(log_path) as f:
+            data = _json.load(f)
+        frames_data = data.get("frames", [])
+        if frames_data:
+            scores = [frm["metrics"]["vmaf"] for frm in frames_data
+                      if "vmaf" in frm.get("metrics", {})]
+            if scores:
+                return float(np.mean(scores))
+        return float(data.get("pooled_metrics", {}).get("vmaf", {}).get("mean", float("nan")))
+    except Exception:
+        return None
+
+
 def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
                 fps: float = 30.0) -> Optional[float]:
     """
-    Compute mean VMAF score using ffmpeg libvmaf. Returns None if ffmpeg-vmaf is unavailable.
-    Writes frames to temp lossless files, calls ffmpeg, parses JSON output.
+    Compute mean VMAF. Tries ffmpeg libvmaf first; falls back to standalone vmaf CLI.
+    Returns None if neither is available.
     """
-    import json as _json
+    import shutil
     import subprocess
     import tempfile
 
@@ -189,7 +224,7 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
 
     h, w = gt_frames[0].shape[:2]
 
-    def _write_rawvideo(frames: List[np.ndarray], path: str) -> None:
+    def _write_lossless_mkv(frames: List[np.ndarray], path: str) -> None:
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
@@ -204,40 +239,72 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
         proc.stdin.close()
         proc.wait()
 
-    with tempfile.TemporaryDirectory(prefix="vmaf_") as td:
-        pred_path = f"{td}/pred.mkv"
-        gt_path   = f"{td}/gt.mkv"
-        log_path  = f"{td}/vmaf.json"
-        _write_rawvideo(pred_frames, pred_path)
-        _write_rawvideo(gt_frames,   gt_path)
+    def _write_y4m(frames: List[np.ndarray], path: str) -> None:
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s:v", f"{w}x{h}", "-r", str(fps),
+            "-i", "-",
+            "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", path,
+        ]
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for f in frames[:n]:
+            proc.stdin.write(f.tobytes())
+        proc.stdin.close()
+        proc.wait()
 
+    with tempfile.TemporaryDirectory(prefix="vmaf_") as td:
+        log_path = f"{td}/vmaf.json"
+
+        # Try ffmpeg libvmaf.
+        pred_mkv = f"{td}/pred.mkv"
+        gt_mkv   = f"{td}/gt.mkv"
+        _write_lossless_mkv(pred_frames, pred_mkv)
+        _write_lossless_mkv(gt_frames,   gt_mkv)
         vmaf_filter = f"libvmaf=log_path={log_path}:log_fmt=json:n_threads=4"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", pred_path, "-i", gt_path,
+            "-i", pred_mkv, "-i", gt_mkv,
             "-filter_complex", f"[0:v][1:v]{vmaf_filter}",
             "-f", "null", "-",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=300)
+            if result.returncode == 0:
+                v = _parse_vmaf_json(log_path)
+                if v is not None:
+                    return v
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
-        if result.returncode != 0:
+            pass
+
+        # Fall back to standalone vmaf CLI (libvmaf package).
+        vmaf_bin = shutil.which("vmaf")
+        model_path = _find_vmaf_model()
+        if vmaf_bin is None or model_path is None:
             return None
 
+        pred_y4m = f"{td}/pred.y4m"
+        gt_y4m   = f"{td}/gt.y4m"
+        _write_y4m(pred_frames, pred_y4m)
+        _write_y4m(gt_frames,   gt_y4m)
+        cmd = [
+            vmaf_bin,
+            "--reference",  gt_y4m,
+            "--distorted",  pred_y4m,
+            "--model",      f"path={model_path}",
+            "--output",     log_path,
+            "--json",
+            "--threads",    "4",
+        ]
         try:
-            with open(log_path) as f:
-                data = _json.load(f)
-            frames_data = data.get("frames", [])
-            if frames_data:
-                scores = [frm["metrics"]["vmaf"] for frm in frames_data
-                          if "vmaf" in frm.get("metrics", {})]
-                if scores:
-                    return float(np.mean(scores))
-            # fallback: pooled mean from top-level
-            return float(data.get("pooled_metrics", {}).get("vmaf", {}).get("mean", float("nan")))
-        except Exception:
-            return None
+            result = subprocess.run(cmd, capture_output=True, timeout=600)
+            if result.returncode == 0:
+                return _parse_vmaf_json(log_path)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    return None
 
 
 # ── Main evaluation ───────────────────────────────────────────────────────────
