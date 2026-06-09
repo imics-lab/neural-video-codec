@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -33,28 +33,24 @@ def decode_ffmpeg_stream_bytes(
     """
     with tempfile.TemporaryDirectory(prefix="ffdec_") as td:
         in_path = os.path.join(td, "stream.mp4")
-        err_path = os.path.join(td, "ffmpeg_stderr.txt")
         with open(in_path, "wb") as f:
             f.write(stream_bytes)
 
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", in_path,
             "-vf", f"scale={int(width)}:{int(height)}",
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
             "pipe:1",
         ]
-        with open(err_path, "wb") as err_f:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err_f)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
         frame_size = int(width) * int(height) * 3
         frames: List[np.ndarray] = []
         idx = 0
-        total_bytes = 0
         while True:
             chunk = proc.stdout.read(frame_size)
-            total_bytes += len(chunk)
             if len(chunk) < frame_size:
                 break
             frame = np.frombuffer(chunk, dtype=np.uint8).reshape(int(height), int(width), 3).copy()
@@ -64,19 +60,6 @@ def decode_ffmpeg_stream_bytes(
             idx += 1
 
         proc.stdout.close()
-        rc = proc.wait()
-
-        if frame_count_hint is not None and len(frames) != frame_count_hint:
-            err_text = ""
-            try:
-                with open(err_path, "r", errors="replace") as ef:
-                    err_text = ef.read(2000).strip()
-            except Exception:
-                pass
-            print(f"[ffdec] decoded={len(frames)} expected={frame_count_hint} "
-                  f"total_bytes={total_bytes} rc={rc} "
-                  f"stream_bytes={len(stream_bytes)} {width}x{height}", flush=True)
-            if err_text:
-                print(f"[ffdec] ffmpeg stderr: {err_text[:500]}", flush=True)
+        proc.wait()
 
     return frames

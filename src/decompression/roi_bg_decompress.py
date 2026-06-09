@@ -636,22 +636,13 @@ def decode_roi_bg_streams_to_memmap(
     codec = str(meta.get("codec", "dcvc")).lower()
     if codec != "dcvc":
         # Non-DCVC: decode all frames via the dispatching helper, then write to memmap.
-        print(f"[decomp] {codec}: roi.bin={len(roi_bin_bytes)} bytes  bg.bin={len(bg_bin_bytes)} bytes  "
-              f"target={width}x{height}", flush=True)
         roi_list, bg_list = decode_roi_bg_streams(
             roi_bin_bytes, bg_bin_bytes, meta,
             progress_cb_roi=progress_cb_roi, progress_cb_bg=progress_cb_bg,
             max_frames_roi=max_frames_roi, max_frames_bg=max_frames_bg,
         )
-        print(f"[decomp] {codec}: decoded roi={len(roi_list)} frames  bg={len(bg_list)} frames", flush=True)
         if not roi_list or not bg_list:
             raise RuntimeError(f"{codec} decoder returned 0 ROI/BG frames")
-        # Sanity-check first decoded frame shape and pixel range.
-        _r0 = roi_list[0]; _b0 = bg_list[0]
-        print(f"[decomp] {codec}: roi[0] shape={_r0.shape} dtype={_r0.dtype} "
-              f"min={int(_r0.min())} max={int(_r0.max())} mean={float(_r0.mean()):.1f}", flush=True)
-        print(f"[decomp] {codec}: bg[0]  shape={_b0.shape} dtype={_b0.dtype} "
-              f"min={int(_b0.min())} max={int(_b0.max())} mean={float(_b0.mean()):.1f}", flush=True)
         roi_map = np.lib.format.open_memmap(
             roi_path, mode="w+", dtype=np.uint8,
             shape=(len(roi_list), height, width, 3),
@@ -668,7 +659,6 @@ def decode_roi_bg_streams_to_memmap(
                 else cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
         roi_map.flush()
         bg_map.flush()
-        print(f"[decomp] {codec}: memmap written roi={roi_map.shape} bg={bg_map.shape}", flush=True)
         return roi_map, len(roi_list), bg_map, len(bg_list)
 
     # DCVC path: stream frames directly into memmap via consumer callbacks.
