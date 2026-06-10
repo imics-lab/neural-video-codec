@@ -408,7 +408,6 @@ def train(args: argparse.Namespace) -> None:
     else:
         LOGGER.info(f"Using single GPU {device}")
     schedule = DiffusionSchedule(T=1000).to(device)
-    vgg_loss = VGGPerceptualLoss().to(device)
 
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
     LOGGER.info(f"RestoreUNet params: {param_count/1e6:.1f}M")
@@ -438,6 +437,14 @@ def train(args: argparse.Namespace) -> None:
         best_val    = ckpt.get("best_val", float("inf"))
 
     vgg_w = float(cfg.get("training", {}).get("vgg_weight", 0.1))
+    if args.vgg_weight is not None:
+        vgg_w = float(args.vgg_weight)
+    if vgg_w > 0.0:
+        vgg_loss = VGGPerceptualLoss().to(device)
+        LOGGER.info(f"VGG perceptual loss enabled (weight={vgg_w})")
+    else:
+        vgg_loss = None
+        LOGGER.info("VGG perceptual loss disabled (L1 only)")
 
     steps_per_epoch = args.steps_per_epoch or len(trn_loader)
 
@@ -474,12 +481,16 @@ def train(args: argparse.Namespace) -> None:
                 pred_noise  = model(model_in, t_rep).contiguous()
                 pred_centre = pred_noise.view(B, T_win, 3, *x_t.shape[-2:])[:, c].contiguous()
                 l1_loss     = F.l1_loss(pred_centre, noise.contiguous())
-                sqrt_acp    = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
-                sqrt_omacp  = schedule.sqrt_one_minus_acp[t_idx].view(B, 1, 1, 1)
-                x0_hat      = (x_t - sqrt_omacp * pred_centre) / sqrt_acp.clamp(min=1e-8)
-                x0_hat      = x0_hat.clamp(-1.0, 1.0)
-                perc_loss   = vgg_loss((x0_hat + 1) / 2, (x0 + 1) / 2)
-                loss        = l1_loss + vgg_w * perc_loss
+                if vgg_loss is not None:
+                    sqrt_acp   = schedule.sqrt_acp[t_idx].view(B, 1, 1, 1)
+                    sqrt_omacp = schedule.sqrt_one_minus_acp[t_idx].view(B, 1, 1, 1)
+                    x0_hat     = (x_t - sqrt_omacp * pred_centre) / sqrt_acp.clamp(min=1e-8)
+                    x0_hat     = x0_hat.clamp(-1.0, 1.0)
+                    perc_loss  = vgg_loss((x0_hat + 1) / 2, (x0 + 1) / 2)
+                    loss       = l1_loss + vgg_w * perc_loss
+                else:
+                    perc_loss  = torch.zeros(1, device=device)
+                    loss       = l1_loss
 
             optimiser.zero_grad()
             scaler.scale(loss).backward()
@@ -616,6 +627,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Cap steps per epoch regardless of dataset size")
     p.add_argument("--temporal-window", type=int, default=None,
                    help="Override temporal window size T (e.g. 1 3 5)")
+    p.add_argument("--vgg-weight",      type=float, default=None,
+                   help="Override vgg_weight from config (0.0 = L1 only)")
     p.add_argument("--verbose",        action="store_true")
     return p.parse_args()
 
