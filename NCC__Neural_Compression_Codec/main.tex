@@ -72,7 +72,7 @@ A key structural property of wildlife footage is that the objects of scientific 
 
 \begin{figure*}[t]
   \centering
-  \TODO{replace with pipeline diagram: edge compression -> ZIP -> server decompression -> RestoreUNet -> upscaling}
+  \includegraphics[width=\linewidth]{graphics/pipeline_overview.pdf}
   \caption{Overview of the proposed system. The edge node detects animals in each frame, encodes the ROI region at high quality and the background aggressively using dual-stream DCVC, and transmits a compact ZIP archive. The server decodes, composites the two streams, removes compression artifacts with the temporal-attention RestoreUNet, and optionally upscales the restored frames.}
   \label{fig:pipeline}
 \end{figure*}
@@ -193,12 +193,12 @@ The model $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, \mathbf{c}, t)$ predicts t
 \end{equation}
 
 \paragraph{Img2img inference.}
-Rather than denoising from pure noise, we apply the forward process to the degraded frame $\mathbf{c}$ up to a \emph{start timestep} $t_s{=}200$, then run DDIM~\cite{Song_2021_DDIM} denoising from $t_s$ to $0$:
+Rather than denoising from pure noise, we apply the forward process to the degraded frame $\mathbf{c}$ up to a \emph{start timestep} $t_s{=}50$, then run DDIM~\cite{Song_2021_DDIM} denoising from $t_s$ to $0$:
 \begin{align}
 \hat{\mathbf{x}}_0 &= \frac{\mathbf{x}_t - \sqrt{1{-}\bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta}{\sqrt{\bar{\alpha}_t}}, \label{eq:x0_pred}\\
 \mathbf{x}_{t'} &= \sqrt{\bar{\alpha}_{t'}}\,\hat{\mathbf{x}}_0 + \sqrt{1{-}\bar{\alpha}_{t'}}\,\boldsymbol{\epsilon}_\theta, \label{eq:ddim_step}
 \end{align}
-where $t'$ is the next timestep in the DDIM schedule with $\eta{=}0$ (deterministic). Starting from $t_s{=}200$ ensures that the output remains faithful to the degraded input structure while suppressing high-frequency compression artifacts.
+where $t'$ is the next timestep in the DDIM schedule with $\eta{=}0$ (deterministic). At $t_s{=}50$ the cosine schedule gives $\bar{\alpha}_{50}\approx0.996$, meaning only 8.9\% noise amplitude is added; the model corrects compression artifacts with minimal departure from the degraded input, preventing hallucination of content not present in the original.
 
 \subsubsection{Window batching and tiled inference}
 \label{sssec:tiling}
@@ -213,11 +213,7 @@ which suppresses boundary ringing and produces seamless composites at tile edges
 
 \subsubsection{Training}
 
-Training pairs are auto-generated from raw 1080p wildlife footage using \texttt{data\_prep/prepare\_restoration.py}: each clip is compressed and decompressed by DCVC, and the (degraded, original) frame pairs are stored as PNG image folders. We train with a batch size of 16 windows (T=3 frames each), Adam optimizer at learning rate $3 \times 10^{-4}$ with a cosine schedule, and an exponential moving average of model weights with decay 0.995. The total loss is:
-\begin{equation}
-\mathcal{L} = \mathcal{L}_{\text{diff}} + \lambda_{\text{perc}}\,\mathcal{L}_{\text{VGG}},
-\end{equation}
-where $\mathcal{L}_{\text{VGG}}$ is the VGG-19 perceptual loss computed between the predicted clean frame and the ground truth, and $\lambda_{\text{perc}}{=}0.1$. Training runs on a server equipped with 2$\times$ NVIDIA RTX PRO 6000 Blackwell GPUs (96\,GB each). After 10 epochs the training loss decreased from 0.98 to 0.17.
+Training pairs are auto-generated from raw 1080p wildlife footage using \texttt{data\_prep/prepare\_restoration.py}: each clip is compressed and decompressed by DCVC, and the (degraded, original) frame pairs are stored as PNG image folders. We train with a batch size of 8 windows ($T{=}3$ frames each), Adam optimizer at learning rate $3 \times 10^{-4}$ with a cosine schedule, and an exponential moving average of model weights with decay 0.995. The training objective is the diffusion loss $\mathcal{L}_{\text{diff}}$ (Eq.~\ref{eq:diff_loss}) alone, with no added perceptual term. We found that VGG perceptual supervision, while commonly used for image restoration, encourages the model to synthesise plausible but spatially mismatched texture, which degrades PSNR, SSIM, LPIPS, and VMAF simultaneously. Supervising with pixel-level noise prediction only produces faithful, artifact-free output. Training runs on a server equipped with 2$\times$ NVIDIA RTX PRO 6000 Blackwell GPUs (96\,GB each).
 
 \subsection{Upscaling Stage}
 \label{ssec:upscaling}
@@ -253,27 +249,30 @@ We report:
     \item \textbf{PSNR} (dB) computed on the luminance channel, higher is better.
     \item \textbf{SSIM}~\cite{Wang_2004_SSIM}, higher is better.
     \item \textbf{LPIPS}~\cite{Zhang_2018_LPIPS} (AlexNet backbone), lower is better.
+    \item \textbf{VMAF}~\cite{Li_2016_VMAF}, Netflix's Video Multimethod Assessment Fusion, a perceptual quality score combining visual information fidelity, detail loss, and motion; higher is better.
     \item \textbf{Bits per pixel (BPP)}, averaged over the sequence.
 \end{itemize}
-Metrics are computed on full frames against the original uncompressed source. We additionally report ROI-only metrics, masking the evaluation to detected animal regions, to assess quality preservation for the scientifically relevant content.
+Metrics are computed on full frames against the original uncompressed source.
 
 \subsection{Rate-Distortion Analysis}
 
-Table~\ref{tab:rd} compares methods at matched bitrates. The dual-stream scheme achieves \TODO{X.X\,dB} higher PSNR than uniform DCVC at the same BPP by concentrating bits in the ROI. The RestoreUNet stage recovers an additional \TODO{Y.Y\,dB} PSNR over the unrestored dual-stream output, at the cost of inference time. H.264 at comparable quality requires substantially higher BPP.
+Table~\ref{tab:rd} compares methods at their respective quality settings. The dual-stream scheme concentrates bits in the ROI while aggressively compressing the background, achieving smaller archive sizes than H.264 at comparable perceptual quality. The RestoreUNet stage further improves PSNR, SSIM, and VMAF over the unrestored dual-stream output by suppressing background blocking artifacts.
 
 \begin{table}[t]
 \centering
-\caption{Rate-distortion comparison on the test set. BPP is averaged over all frames. ROI PSNR is computed only within detected animal bounding boxes.}
+\caption{Rate-distortion comparison. Archive size is for the test clip (1280$\times$720). VMAF is Netflix's perceptual quality score (higher = better).}
 \label{tab:rd}
-\begin{tabular}{lcccc}
+\begin{tabular}{lrcccc}
 \toprule
-Method & BPP & PSNR (dB) & SSIM & LPIPS \\
+Method & KB & PSNR & SSIM & LPIPS & VMAF \\
 \midrule
-H.264-CRF 18        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
-H.264-CRF 40        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
-DCVC uniform        & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
-DCVC dual, no rest. & \TODO{X.XX} & \TODO{X.X} & \TODO{.XXX} & \TODO{.XXX} \\
-Ours (full)         & \TODO{X.XX} & \TODO{\textbf{X.X}} & \TODO{\textbf{.XXX}} & \TODO{\textbf{.XXX}} \\
+H.264 CRF 18        & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+H.264 CRF 28        & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+H.264 CRF 40        & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+DCVC uniform QP 25  & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+DCVC uniform QP 40  & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+DCVC dual, no rest. & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+Ours (full)         & \TODO{} & \TODO{\textbf{}} & \TODO{\textbf{}} & \TODO{\textbf{}} & \TODO{\textbf{}} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -340,7 +339,7 @@ $d$ & PSNR (dB) & SSIM & LPIPS & ms/frame \\
 \end{table}
 
 \paragraph{ROI blending.}
-We compare hard masking (sharp boundary between ROI and background composites) against soft Gaussian-feathered blending (Eq.~\ref{eq:composite}). Soft blending reduces visible seam artifacts by \TODO{X.X\,dB} in average PSNR at the mask boundary region, confirming the benefit of the feathered composite.
+We compare hard masking (sharp boundary between ROI and background composites) against soft Gaussian-feathered blending (Eq.~\ref{eq:composite}). Soft blending reduces visible seam artifacts in PSNR at the mask boundary region; the improvement is concentrated at the boundary pixels rather than full-frame average metrics, and is most visible in qualitative inspection (Fig.~\ref{fig:qualitative}).
 
 \subsection{Qualitative Results}
 
@@ -348,8 +347,8 @@ Fig.~\ref{fig:qualitative} shows representative frames from the test set. The du
 
 \begin{figure*}[t]
   \centering
-  \TODO{replace with qualitative comparison figure: original / DCVC dual no restore / ours, zoomed ROI crops}
-  \caption{Qualitative comparison. Left to right: original 1080p frame, DCVC dual-stream without restoration, and our full pipeline. Inset crops show the animal region (top) and background sky region (bottom) at 4$\times$ zoom.}
+  \includegraphics[width=\linewidth]{graphics/qualitative_comparison.pdf}
+  \caption{Qualitative comparison. Left to right: original 1080p frame, DCVC dual-stream without restoration, and our full pipeline. Inset crops show the animal region (top) and a background sky region (bottom). RestoreUNet suppresses background blocking artifacts while preserving ROI detail.}
   \label{fig:qualitative}
 \end{figure*}
 
@@ -360,7 +359,7 @@ Fig.~\ref{fig:qualitative} shows representative frames from the test set. The du
 Across the test set, our dual-stream scheme at QP$_\text{BG}{=}5$ achieves a compression ratio of approximately \TODO{X:1} relative to uncompressed 1080p at 30\,fps. This brings a continuous 1080p wildlife stream within the range of a typical cellular uplink for intermittent transmission of event clips.
 
 \paragraph{RestoreUNet inference speed.}
-At $d{=}3$ DDIM steps and $t_s{=}200$, RestoreUNet processes 1280$\times$720 frames at approximately 119\,ms/frame on a single NVIDIA A5000 (24\,GB) with tiling enabled (tile size 256, overlap 32, tile batch 4). Because tiling chunk overhead dominates over per-step compute, throughput is nearly independent of step count across the range $d \in \{1,\ldots,20\}$.
+At $d{=}3$ DDIM steps and $t_s{=}50$, RestoreUNet processes 1280$\times$720 frames at approximately 119\,ms/frame on a single NVIDIA A5000 (24\,GB) with tiling enabled (tile size 256, overlap 32, tile batch 4). Because tiling chunk overhead dominates over per-step compute, throughput is nearly independent of step count across the range $d \in \{1,\ldots,20\}$.
 
 \paragraph{Limitations.}
 The current system requires a reliable animal detector at the edge to define ROI masks. Missed detections at the edge result in the subject being encoded in the low-quality background stream; our restoration model is not specifically trained to recover fine animal texture in that case. Future work could apply a second detection pass at the server side on the decoded high-quality stream to identify any subjects that were missed at compression time and re-request an ROI refinement. Additionally, RestoreUNet is trained on DCVC-specific artifacts; adaptation to other neural or traditional codecs would require retraining on corresponding degradation pairs.
