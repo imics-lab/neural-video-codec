@@ -14,7 +14,6 @@ models/*.pt
 models/*.onnx
 
 # ── External repos (cloned separately on each machine) ───────────────────────
-DCVC/
 S3Diff/
 weights/
 

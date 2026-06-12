@@ -111,7 +111,7 @@ def _eval_metrics(pred: Path, csv_out: Path, *, vmaf: bool = False) -> Dict[str,
     import json as _json
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
     agg_out = csv_out.with_suffix(".agg.json")
-    cmd = _py("eval_metrics.py", "--pred", pred, "--gt", GT_VIDEO,
+    cmd = _py("scripts/eval_metrics.py", "--pred", pred, "--gt", GT_VIDEO,
               "--out-csv", csv_out, "--agg-out", agg_out)
     if not vmaf:
         cmd += ["--no-vmaf"]
@@ -145,7 +145,7 @@ def _eval_metrics(pred: Path, csv_out: Path, *, vmaf: bool = False) -> Dict[str,
 
 
 def _eval_temporal(video: Path) -> float:
-    out = _run(_py("eval_temporal.py", "--videos", video), capture=True)
+    out = _run(_py("scripts/eval_temporal.py", "--videos", video), capture=True)
     if DRY_RUN or out is None:
         return 0.0
     for line in out.splitlines():
