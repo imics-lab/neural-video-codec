@@ -1,43 +1,7 @@
-% WACV 2026 Paper Template
-% based on the ICCV 2025 template (https://media.eventhosts.cc/Conferences/ICCV2025/ICCV2025-Author-Kit-Feb.zip) with
-% WACV-specific details (e.g., 2 tracks) from the WACV 2025 template (https://www.dropbox.com/scl/fi/su44zgdhrzik26p2xu37k/WACV-2025-Author-Kit-Template.zip?rlkey=5qcfimjhxnmx3wlyk7yhk8wg7&dl=0)
-
-\documentclass[10pt,twocolumn,letterpaper]{article}
-
-%%%%%%%%% PAPER TYPE  - PLEASE UPDATE FOR FINAL VERSION
-%\usepackage[review,algorithms]{wacv}
-%\usepackage[review,applications]{wacv}
-\usepackage{wacv}              % camera-ready
-%\usepackage[pagenumbers]{wacv}
+% ICTAI 2025 Paper - IEEEtran conference format
+\documentclass[10pt, conference]{IEEEtran}
 
 \input{preamble}
-
-\definecolor{wacvblue}{rgb}{0.21,0.49,0.74}
-\usepackage[pagebackref,breaklinks,colorlinks,allcolors=wacvblue]{hyperref}
-
-%%%%%%%%% PAPER ID  - PLEASE UPDATE
-\def\wacvPaperID{*****}
-\def\confName{WACV}
-\def\confYear{2026}
-
-%%%%%%%%% TITLE
-\title{ROI-Aware Neural Video Compression with Temporal-Attention\\
-Diffusion Restoration for Wildlife Camera Traps}
-
-%%%%%%%%% AUTHORS
-\author{%
-  Mykhailo~Sakevych \\
-  Department of Computer Science\\
-  Texas State University\\
-  San Marcos, TX 78666 \\
-  \texttt{ukb12@txstate.edu} \\
-  \and
-  Vangelis~Metsis \\
-  Department of Computer Science\\
-  Texas State University\\
-  San Marcos, TX 78666 \\
-  \texttt{vmetsis@txstate.edu} \\
-}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -54,6 +18,26 @@ Diffusion Restoration for Wildlife Camera Traps}
 \usepackage{algpseudocode}
 \usepackage{graphicx}
 \usepackage{subcaption}
+\usepackage[hidelinks]{hyperref}
+
+%%%%%%%%% TITLE
+\title{ROI-Aware Neural Video Compression with Temporal-Attention\\
+Diffusion Restoration for Wildlife Camera Traps}
+
+%%%%%%%%% AUTHORS
+\author{%
+  \IEEEauthorblockN{Mykhailo Sakevych}
+  \IEEEauthorblockA{\textit{Department of Computer Science}\\
+    \textit{Texas State University}\\
+    San Marcos, TX 78666\\
+    ukb12@txstate.edu}
+  \and
+  \IEEEauthorblockN{Vangelis Metsis}
+  \IEEEauthorblockA{\textit{Department of Computer Science}\\
+    \textit{Texas State University}\\
+    San Marcos, TX 78666\\
+    vmetsis@txstate.edu}
+}
 
 \begin{document}
 
@@ -390,9 +374,7 @@ The current system requires a reliable animal detector at the edge to define ROI
 We presented an end-to-end neural video pipeline for bandwidth-constrained wildlife camera traps. By combining object-detection-guided dual-stream DCVC encoding with a temporal-attention diffusion restoration model, the system achieves substantial bitrate reduction while preserving subject quality and removing background compression artifacts. The modular architecture enables per-stage evaluation and facilitates component replacement as better compression or restoration models become available. Experimental results confirm that the dual-stream scheme outperforms uniform DCVC at matched bitrate, and that temporal-attention restoration consistently improves temporal coherence and perceptual quality over per-frame alternatives.
 
 
-{\small
+\bibliographystyle{IEEEtran}
 \bibliography{References}
-\bibliographystyle{plain}
-}
 
 \end{document}
