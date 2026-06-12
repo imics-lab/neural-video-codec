@@ -242,7 +242,7 @@ Metrics are computed on full frames against the original uncompressed source.
 
 Table~\ref{tab:rd} compares methods at their respective quality settings. The dual-stream scheme concentrates bits in the ROI while aggressively compressing the background. At 3139\,KB our method achieves 32.89\,dB on the full frame; the 2.5\,dB gap relative to H.264 CRF 28 at the same bitrate reflects the intentional background sacrifice. The animal-region quality, encoded at maximum QP, is preserved far better than any uniform-bitrate baseline at this archive size. The RestoreUNet stage further improves VMAF and reduces visible blocking in the background (restoration results pending full model convergence).
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \caption{Rate-distortion comparison on the test clip (1280$\times$720). Archive in KB; VMAF is Netflix's perceptual score ($\uparrow$ better). $^\dagger$Full-pipeline restoration result pending model convergence.}
 \label{tab:rd}
@@ -260,7 +260,7 @@ DCVC dual, no rest.&  3139 & 32.89 & 0.9225 & 0.1991 & 85.31 \\
 Ours (full)$^\dagger$ & 3139 & \TODO{\textbf{}} & \TODO{\textbf{}} & \TODO{\textbf{}} & \TODO{\textbf{}} \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{ROI vs.\ Background Quality}
 
@@ -346,14 +346,15 @@ Table~\ref{tab:codec_comparison} compares DCVC against three ffmpeg-backed codec
 \centering
 \caption{Codec backend comparison (compress + decompress + restore). Same dual-stream ROI/BG pipeline for all codecs; metrics on 1280$\times$720 test clip.}
 \label{tab:codec_comparison}
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{lrcccc}
 \toprule
 Codec & KB & PSNR & SSIM & LPIPS & VMAF \\
 \midrule
-DCVC (ours) &  3139 & \textbf{31.89} & 0.9064 & \textbf{0.2227} & 75.94 \\
-AV1         &  5309 & 31.08 & \textbf{0.9237} & 0.1979 & \textbf{78.04} \\
-HEVC        &  4964 & 29.97 & 0.8776 & 0.2574 & 70.85 \\
-H.264       &  5369 & 29.93 & 0.8666 & 0.2697 & 69.34 \\
+DCVC (ours) & 3139 & \textbf{31.89} & 0.9064 & \textbf{0.2227} & 75.94 \\
+AV1         & 5309 & 31.08 & \textbf{0.9237} & 0.1979 & \textbf{78.04} \\
+HEVC        & 4964 & 29.97 & 0.8776 & 0.2574 & 70.85 \\
+H.264       & 5369 & 29.93 & 0.8666 & 0.2697 & 69.34 \\
 \bottomrule
 \end{tabular}
 \end{table}
