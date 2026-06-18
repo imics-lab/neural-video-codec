@@ -1,0 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.2.2+cu121
+numpy==1.26.4
+scipy==1.13.1
+tqdm==4.66.5
+pyyaml==6.0.2
+pybind11==2.13.6
+ninja==1.11.1.1
+pillow==10.4.0
+setuptools==72.1.0
+wheel==0.44.0
+packaging==24.1
+pytest==8.3.4
+pyyaml

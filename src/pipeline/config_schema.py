@@ -250,16 +250,51 @@ def validate_pipeline_config(cfg: Dict[str, Any], video_path: Optional[str] = No
     dcvc_cfg = _as_dict(comp_cfg.get("dcvc", {}), "compression.dcvc", errors)
     quality_cfg = _as_dict(comp_cfg.get("quality", {}), "compression.quality", errors)
     roi_comp_cfg = _as_dict(comp_cfg.get("roi", {}), "compression.roi", errors)
+    codec_name = str(comp_cfg.get("codec", "dcvc")).strip().lower()
+    stream_codecs_cfg = _as_dict(comp_cfg.get("stream_codecs", {}), "compression.stream_codecs", errors)
+    codec_aliases = {"h265": "hevc", "microsoft_dcvc": "dcvc", "dcvc_rt": "dcvc_int16", "dcvc-rt": "dcvc_int16"}
 
-    for key in ("model_i", "model_p", "repo_dir"):
-        if not dcvc_cfg.get(key):
-            errors.append(f"compression.dcvc.{key} is required")
-    if dcvc_cfg.get("model_i"):
-        _must_exist(str(dcvc_cfg["model_i"]), "compression.dcvc.model_i", root, errors)
-    if dcvc_cfg.get("model_p"):
-        _must_exist(str(dcvc_cfg["model_p"]), "compression.dcvc.model_p", root, errors)
+    def _norm_codec(raw: Any) -> str:
+        c = str(raw or codec_name).strip().lower()
+        return codec_aliases.get(c, c)
+
+    roi_stream_codec = _norm_codec(stream_codecs_cfg.get("roi", codec_name))
+    bg_stream_codec = _norm_codec(stream_codecs_cfg.get("bg", codec_name))
+    allowed_stream_codecs = {"dcvc", "dcvc_int16", "int16", "dcvc_rt_int16", "h264", "hevc", "av1"}
+    for stream_name, stream_codec in (("roi", roi_stream_codec), ("bg", bg_stream_codec)):
+        if stream_codec not in allowed_stream_codecs:
+            errors.append(
+                f"compression.stream_codecs.{stream_name} must be one of: "
+                "dcvc, dcvc_int16/dcvc_rt, h264, h265/hevc, av1"
+            )
+    needs_int16 = any(c in {"dcvc_int16", "int16", "dcvc_rt_int16"} for c in (roi_stream_codec, bg_stream_codec))
+    needs_microsoft_dcvc = any(c == "dcvc" for c in (roi_stream_codec, bg_stream_codec))
+
+    if not dcvc_cfg.get("repo_dir"):
+        if needs_int16 or needs_microsoft_dcvc:
+            errors.append("compression.dcvc.repo_dir is required")
     if dcvc_cfg.get("repo_dir"):
         _must_exist(str(dcvc_cfg["repo_dir"]), "compression.dcvc.repo_dir", root, errors)
+    if needs_int16:
+        if not dcvc_cfg.get("bundle_path"):
+            errors.append("compression.dcvc.bundle_path is required for dcvc_int16")
+        elif dcvc_cfg.get("repo_dir"):
+            repo_path = Path(str(dcvc_cfg["repo_dir"])).expanduser()
+            if not repo_path.is_absolute():
+                repo_path = (root / repo_path).resolve()
+            bundle_path = Path(str(dcvc_cfg["bundle_path"])).expanduser()
+            if not bundle_path.is_absolute():
+                bundle_path = (repo_path / bundle_path).resolve()
+            if not bundle_path.exists():
+                errors.append(f"compression.dcvc.bundle_path does not exist: {bundle_path}")
+    if needs_microsoft_dcvc:
+        for key in ("model_i", "model_p"):
+            if not dcvc_cfg.get(key):
+                errors.append(f"compression.dcvc.{key} is required")
+        if dcvc_cfg.get("model_i"):
+            _must_exist(str(dcvc_cfg["model_i"]), "compression.dcvc.model_i", root, errors)
+        if dcvc_cfg.get("model_p"):
+            _must_exist(str(dcvc_cfg["model_p"]), "compression.dcvc.model_p", root, errors)
     if "reset_interval" in dcvc_cfg:
         _ensure_number_range(dcvc_cfg["reset_interval"], "compression.dcvc.reset_interval", errors, 1, None)
     if "device" in dcvc_cfg:

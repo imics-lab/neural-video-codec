@@ -26,6 +26,15 @@ import cv2
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _normalize_archive_codec(raw: Any) -> str:
+    codec = str(raw or "dcvc").strip().lower()
+    if codec in {"microsoft_dcvc"}:
+        return "dcvc"
+    if codec in {"dcvc_rt", "dcvc-rt"}:
+        return "dcvc_int16"
+    return codec
+
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return bool(value)
@@ -553,13 +562,23 @@ def _decode_stream_bytes(
     progress_cb: Optional[Callable[[int], None]],
 ) -> List[np.ndarray]:
     """Dispatch to DCVC or ffmpeg decoder based on codec stored in meta."""
-    codec = str(meta.get("codec", "dcvc")).lower()
+    stream_meta = (meta.get("streams", {}) or {}).get(stream, {}) or {}
+    codec = _normalize_archive_codec(stream_meta.get("codec", meta.get("codec", "dcvc")))
+    if codec in {"dcvc_int16", "int16", "dcvc_rt_int16"}:
+        from .dcvc_int16_decoder import decode_stream_bytes_dcvc_int16
+
+        return decode_stream_bytes_dcvc_int16(
+            stream_bytes,
+            meta,
+            stream,
+            frame_count_hint=frame_count_hint,
+            progress_cb=progress_cb,
+        )
     if codec != "dcvc":
         video_info = meta.get("video", {}) or {}
         width  = int(video_info.get("width",  0) or 0)
         height = int(video_info.get("height", 0) or 0)
         if width <= 0 or height <= 0:
-            stream_meta = (meta.get("streams", {}) or {}).get(stream, {}) or {}
             width  = int(stream_meta.get("width",  width)  or width)
             height = int(stream_meta.get("height", height) or height)
         from .ffmpeg_decoder import decode_ffmpeg_stream_bytes
@@ -633,8 +652,37 @@ def decode_roi_bg_streams_to_memmap(
     roi_path = work_dir / "roi_frames.npy"
     bg_path  = work_dir / "bg_frames.npy"
 
-    codec = str(meta.get("codec", "dcvc")).lower()
-    if codec != "dcvc":
+    codec = _normalize_archive_codec(meta.get("codec", "dcvc"))
+    stream_codecs = [
+        _normalize_archive_codec(((meta.get("streams", {}) or {}).get(name, {}) or {}).get("codec", codec))
+        for name in ("roi", "bg")
+    ]
+    if codec in {"dcvc_int16", "int16", "dcvc_rt_int16"}:
+        roi_list, bg_list = decode_roi_bg_streams(
+            roi_bin_bytes, bg_bin_bytes, meta,
+            progress_cb_roi=progress_cb_roi, progress_cb_bg=progress_cb_bg,
+            max_frames_roi=max_frames_roi, max_frames_bg=max_frames_bg,
+        )
+        if not roi_list or not bg_list:
+            raise RuntimeError(f"{codec} decoder returned 0 ROI/BG frames")
+        roi_map = np.lib.format.open_memmap(
+            roi_path, mode="w+", dtype=np.uint8,
+            shape=(len(roi_list), height, width, 3),
+        )
+        bg_map = np.lib.format.open_memmap(
+            bg_path, mode="w+", dtype=np.uint8,
+            shape=(len(bg_list), height, width, 3),
+        )
+        for i, f in enumerate(roi_list):
+            roi_map[i] = f if f.shape[:2] == (height, width) \
+                else cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+        for i, f in enumerate(bg_list):
+            bg_map[i] = f if f.shape[:2] == (height, width) \
+                else cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+        roi_map.flush()
+        bg_map.flush()
+        return roi_map, len(roi_list), bg_map, len(bg_list)
+    if codec != "dcvc" or any(c != "dcvc" for c in stream_codecs):
         # Non-DCVC: decode all frames via the dispatching helper, then write to memmap.
         roi_list, bg_list = decode_roi_bg_streams(
             roi_bin_bytes, bg_bin_bytes, meta,

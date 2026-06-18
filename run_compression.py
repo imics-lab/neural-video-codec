@@ -95,7 +95,7 @@ def _load_runtime_components() -> None:
 
     if compress_keep_streams_dcvc is None:
         try:
-            from compression import compress_keep_streams_dcvc as _compress_keep_streams_dcvc
+            from compression import compress_keep_streams as _compress_keep_streams_dcvc
 
             compress_keep_streams_dcvc = _compress_keep_streams_dcvc
         except Exception:

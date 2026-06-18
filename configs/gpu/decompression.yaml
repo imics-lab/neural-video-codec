@@ -11,17 +11,16 @@ decompression:
 
   # Local DCVC paths (used to override archive metadata paths when needed).
   dcvc:
-    repo_dir: "DCVC"
-    model_i: "models/cvpr2025_image.pth.tar"
-    model_p: "models/cvpr2025_video.pth.tar"
+    repo_dir: "dcvc_int16"
+    bundle_path: "../models/int16_bundle_v1.0.0.pt"
     use_cuda: true
     cuda_idx: 0
     force_zero_thres: null
 
   interpolate:
     enable: true
-    model: "amt-s"
-    weights_path: "models/amt-s.pth"
+    model: "amt-l"
+    weights_path: "models/amt-l.pth"
     # Local AMT repository path.
     repo_dir: "_third_party_amt"
     device: "cuda"

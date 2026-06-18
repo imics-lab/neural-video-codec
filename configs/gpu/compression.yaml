@@ -55,13 +55,25 @@ frame_removal:
     bg_idle_interval: 10
 
 compression:
+  # Default for both streams when stream_codecs is omitted.
+  codec: "dcvc_int16"
+  # Per-stream codec switch.
+  # Values:
+  #   dcvc        = original Microsoft DCVC backend
+  #   dcvc_int16  = deterministic INT16 DCVC-RT backend
+  #   dcvc_rt     = alias for dcvc_int16
+  #   h264/h265/hevc/av1 = FFmpeg backends
+  stream_codecs:
+    roi: "dcvc_int16"
+    bg: "dcvc_int16"
   # Low-memory mode streams ROI/BG frames into the DCVC encoder instead of
   # caching all kept full-resolution frames in RAM (reduces peak CPU RAM).
   low_memory: true
   dcvc:
-    repo_dir: "DCVC"
-    model_i: "models/cvpr2025_image.pth.tar"
-    model_p: "models/cvpr2025_video.pth.tar"
+    repo_dir: "dcvc_int16"
+    bundle_path: "../models/int16_bundle_v1.0.0.pt"
+    model_i: null
+    model_p: null
     device: "cuda"
     use_cuda: true
     cuda_idx: 0
@@ -76,6 +88,18 @@ compression:
     roi_qp_p: 63
     bg_qp_i: 25
     bg_qp_p: 25
+    # Used when the corresponding stream codec is h264/h265/hevc/av1.
+    roi_crf: 20
+    bg_crf: 38
+  ffmpeg:
+    # Defaults are libx264, libx265, and libsvtav1. Override here if needed.
+    h264_encoder: "libx264"
+    hevc_encoder: "libx265"
+    av1_encoder: "libsvtav1"
+    preset:
+      h264: "medium"
+      hevc: "medium"
+      av1: "5"
 
 restoration:
   config: "configs/gpu/restoration.yaml"
