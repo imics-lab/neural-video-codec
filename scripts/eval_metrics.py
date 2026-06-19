@@ -241,6 +241,7 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
 
     with tempfile.TemporaryDirectory(prefix="vmaf_") as td:
         log_path  = f"{td}/vmaf.json"
+        log_name  = "vmaf.json"
         pred_y4m  = f"{td}/pred.y4m"
         gt_y4m    = f"{td}/gt.y4m"
 
@@ -248,7 +249,9 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
             return None
 
         # Try ffmpeg libvmaf.
-        vmaf_filter = f"libvmaf=log_path={log_path}:log_fmt=json:n_threads=4"
+        # Use a relative log path. Absolute Windows paths contain ':' and '\',
+        # which FFmpeg filter option parsing treats as separators/escapes.
+        vmaf_filter = f"libvmaf=log_path={log_name}:log_fmt=json:n_threads=4"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-i", pred_y4m, "-i", gt_y4m,
@@ -256,7 +259,7 @@ def _vmaf_video(pred_frames: List[np.ndarray], gt_frames: List[np.ndarray],
             "-f", "null", "-",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, timeout=300, cwd=td)
             if result.returncode == 0:
                 v = _parse_vmaf_json(log_path)
                 if v is not None:

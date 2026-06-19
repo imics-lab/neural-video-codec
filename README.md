@@ -69,7 +69,7 @@ data_prep/              Dataset preparation (see data_prep/README.md)
 
 configs/gpu/            YAML configuration files (one per stage + pipeline)
 scripts/                Utility scripts (see scripts/README.md)
-  download_models.py    Download DCVC and S3Diff checkpoints
+  download_models.py    Download release-backed model files into models/
   sanity_check.py       Verify installation
   gen_latex_tables.py   Generate paper tables from results/ CSVs
   gen_pipeline_fig.py   Generate pipeline overview figure (PDF + PNG)

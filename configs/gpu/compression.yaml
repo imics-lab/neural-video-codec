@@ -92,14 +92,14 @@ compression:
     roi_crf: 20
     bg_crf: 38
   ffmpeg:
-    # Defaults are libx264, libx265, and libsvtav1. Override here if needed.
+    # Defaults are libx264, libx265, and libaom-av1. Override here if needed.
     h264_encoder: "libx264"
     hevc_encoder: "libx265"
-    av1_encoder: "libsvtav1"
+    av1_encoder: "libaom-av1"
     preset:
       h264: "medium"
-      hevc: "medium"
-      av1: "5"
+      hevc: "ultrafast"
+      av1: "8"
 
 restoration:
   config: "configs/gpu/restoration.yaml"

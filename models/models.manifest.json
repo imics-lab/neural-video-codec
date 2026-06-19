@@ -1,45 +1,32 @@
 {
-  "_comment": "Model manifest for neural_video_codec. Run scripts/download_models.py to fetch weights.",
+  "_comment": "Release-backed model manifest. Assets are downloaded from the GitHub release by filename.",
+  "github_repo": "imics-lab/neural-video-codec",
+  "release_tag": "nevc-models",
   "models": [
     {
-      "name": "DCVC I-frame (IntraNoAR)",
-      "path": "checkpoints/IntraNoAR/model.pth.tar",
-      "url": null,
-      "sha256": null,
-      "required": true,
-      "notes": "DCVC CVPR-2025 intra-frame model. Download from the official DCVC repository."
+      "file": "MDV6-yolov9-c.pt",
+      "sha256": "daa6cd5d2e3fd52754889cd9c702f73c0349a8388318952e6eaf83e0667543e4",
+      "size_bytes": 51572347
     },
     {
-      "name": "DCVC P-frame (DMC)",
-      "path": "checkpoints/video/model.pth.tar",
-      "url": null,
-      "sha256": null,
-      "required": true,
-      "notes": "DCVC CVPR-2025 inter-frame model. Download from the official DCVC repository."
+      "file": "MDV6-yolov9-c.onnx",
+      "sha256": "d31c708763d93e2680131cb915169f6b16ef009e50bc31179872dfcdc5d5ddeb",
+      "size_bytes": 102875669
     },
     {
-      "name": "YOLO11n (detection)",
-      "path": "checkpoints/yolo11n.pt",
-      "url": null,
-      "sha256": null,
-      "required": true,
-      "notes": "YOLOv11 nano checkpoint. Download via `pip install ultralytics` and `yolo export model=yolo11n.pt`."
+      "file": "int16_bundle_v1.0.0.pt",
+      "sha256": "c1fc2341d3faf28f16b8e77c0869aecddade674aa0b43be2b64c516f49a8554f",
+      "size_bytes": 201024778
     },
     {
-      "name": "Model R — Restoration (best)",
-      "path": "checkpoints/restoration/best.pt",
-      "url": null,
-      "sha256": null,
-      "required": false,
-      "notes": "Trained via training/train_restoration.py. Not pre-provided; must be trained locally."
+      "file": "amt-s.pth",
+      "sha256": "b0e5999aa804efb851936b6fe949281725e2f4820876fecc0103874ce41ed85d",
+      "size_bytes": 12038295
     },
     {
-      "name": "Model S — Super-Resolution (best)",
-      "path": "checkpoints/sr/best.pt",
-      "url": null,
-      "sha256": null,
-      "required": false,
-      "notes": "Trained via training/train_sr.py. Not pre-provided; must be trained locally."
+      "file": "amt-l.pth",
+      "sha256": "8e259cf07c3adfd53555bbb0a73221d24f4a08735a40f8375a6b6ac10fac8cf6",
+      "size_bytes": 51816355
     }
   ]
 }

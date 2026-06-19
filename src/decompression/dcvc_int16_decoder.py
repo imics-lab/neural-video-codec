@@ -37,6 +37,7 @@ def _resolve_runtime_path(raw_path: str, *, kind: str) -> Path:
     if kind == "repo":
         candidates.append((ROOT / "dcvc_int16").resolve())
     elif kind == "bundle":
+        candidates.append((ROOT / "models" / p.name).resolve())
         candidates.append((ROOT / "dcvc_int16" / "models" / p.name).resolve())
     for c in candidates:
         if c.exists():

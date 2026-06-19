@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 PASS = "PASS"
@@ -112,7 +112,10 @@ def run_checks() -> bool:
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             for entry in manifest.get("models", []):
-                name = entry["name"]
+                name = entry.get("file") or entry.get("name")
+                if not name:
+                    all_ok &= _check("  manifest entry", False, "missing file/name")
+                    continue
                 model_path = ROOT / "models" / name
                 expected_sha = entry.get("sha256", "")
 

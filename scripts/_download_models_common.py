@@ -20,15 +20,20 @@ MANIFEST_PATH = MODELS_DIR / "models.manifest.json"
 USER_AGENT = "edge-roi-video-compression-model-downloader/1.0"
 
 MODEL_GROUPS = {
+    "all": [
+        "MDV6-yolov9-c.pt",
+        "MDV6-yolov9-c.onnx",
+        "int16_bundle_v1.0.0.pt",
+        "amt-s.pth",
+        "amt-l.pth",
+    ],
     "compression": [
         "MDV6-yolov9-c.pt",
         "MDV6-yolov9-c.onnx",
-        "cvpr2025_image.pth.tar",
-        "cvpr2025_video.pth.tar",
+        "int16_bundle_v1.0.0.pt",
     ],
     "decompression": [
-        "cvpr2025_image.pth.tar",
-        "cvpr2025_video.pth.tar",
+        "int16_bundle_v1.0.0.pt",
         "amt-s.pth",
         "amt-l.pth",
     ],
@@ -304,6 +309,11 @@ def build_parser(group: str, description: str) -> argparse.ArgumentParser:
         action="store_true",
         help="Redownload files even if a matching file already exists.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Alias for --overwrite.",
+    )
     parser.epilog = (
         f"This downloads the {group} model set defined in models/models.manifest.json "
         "using GitHub Release asset names that match the manifest filenames."
@@ -325,7 +335,7 @@ def run_cli(group: str, description: str) -> int:
         tag=tag,
         models_dir=models_dir,
         token=args.github_token,
-        overwrite=bool(args.overwrite),
+        overwrite=bool(args.overwrite or args.force),
     )
     print(f"Downloaded/validated {len(downloaded)} {group} model file(s) into {models_dir}")
     return 0

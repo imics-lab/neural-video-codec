@@ -217,6 +217,14 @@ def _decode_stream_bytes_dcvc(
     set_torch_env()
     device = torch.device(f"cuda:{int(selected_cuda_idx)}")
 
+    if _coerce_bool(dcvc_cfg.get("disable_custom_cuda_inference", False), default=False):
+        try:
+            import src.layers.cuda_inference as cuda_inference  # type: ignore
+
+            cuda_inference.CUSTOMIZED_CUDA_INFERENCE = False
+        except Exception:
+            pass
+
     from src.models.image_model import DMCI  # type: ignore
     from src.models.video_model import DMC  # type: ignore
 
@@ -230,7 +238,8 @@ def _decode_stream_bytes_dcvc(
     p_net = p_net.to(device).eval()
     p_net.update(force_zero_thres)
 
-    if device.type == "cuda":
+    use_fp16 = _coerce_bool(dcvc_cfg.get("use_fp16", True), default=True)
+    if device.type == "cuda" and use_fp16:
         i_net.half()
         p_net.half()
 

@@ -107,7 +107,18 @@ def _apply_dcvc_overrides(meta: Dict[str, Any], dec_cfg: Dict[str, Any]) -> None
         return
     device_overridden = False
     cuda_idx_overridden = False
-    for key in ("repo_dir", "model_i", "model_p", "device", "use_cuda", "cuda_idx", "force_zero_thres"):
+    for key in (
+        "repo_dir",
+        "model_i",
+        "model_p",
+        "bundle_path",
+        "device",
+        "use_cuda",
+        "cuda_idx",
+        "force_zero_thres",
+        "disable_custom_cuda_inference",
+        "use_fp16",
+    ):
         value = dcvc_override.get(key, None)
         if value is None:
             continue

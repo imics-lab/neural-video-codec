@@ -20,8 +20,8 @@ from .dcvc_encoder import VideoInfo  # reuse VideoInfo dataclass
 # Default encoder/preset/CRF per codec name.
 # CRF scales differ: SVT-AV1 0-63, libx265 0-51, libx264 0-51 (lower = better).
 _CODEC_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "av1":  {"encoder": "libsvtav1", "preset": "5",      "roi_crf": 22, "bg_crf": 42},
-    "hevc": {"encoder": "libx265",   "preset": "medium", "roi_crf": 20, "bg_crf": 38},
+    "av1":  {"encoder": "libaom-av1", "preset": "8",         "roi_crf": 22, "bg_crf": 42},
+    "hevc": {"encoder": "libx265",    "preset": "ultrafast", "roi_crf": 20, "bg_crf": 38},
     "h264": {"encoder": "libx264",   "preset": "medium", "roi_crf": 20, "bg_crf": 38},
 }
 
@@ -80,30 +80,36 @@ def encode_frames_ffmpeg_to_bytes(
             "-i", "pipe:0",
             "-c:v", encoder,
             "-crf", str(crf),
-            "-preset", str(preset),
             "-pix_fmt", "yuv420p",
         ]
+        if str(encoder).lower() == "libaom-av1":
+            cmd.extend(["-cpu-used", str(preset), "-row-mt", "1"])
+        else:
+            cmd.extend(["-preset", str(preset)])
         if extra_ffmpeg_args:
             cmd.extend(extra_ffmpeg_args)
         cmd.append(out_path)
 
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
         frame_indices: List[int] = []
         n = 0
-        for src_idx, frame in frames_iter:
-            frame_indices.append(int(src_idx))
-            proc.stdin.write(frame.tobytes())
-            n += 1
+        try:
+            for src_idx, frame in frames_iter:
+                frame_indices.append(int(src_idx))
+                proc.stdin.write(frame.tobytes())
+                n += 1
 
-        proc.stdin.close()
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr is not None else ""
         proc.wait()
 
         if proc.returncode != 0:
             raise RuntimeError(
-                f"ffmpeg ({encoder}) encoding failed (exit {proc.returncode}). "
-                f"Check encoder availability: ffmpeg -encoders | grep {encoder}"
+                f"ffmpeg ({encoder}) encoding failed (exit {proc.returncode}).\n{stderr}"
             )
 
         with open(out_path, "rb") as f:

@@ -38,32 +38,41 @@ class TestModelDownloadCommon(unittest.TestCase):
 
     def test_select_group_specs_uses_manifest_entries_for_both_groups(self) -> None:
         manifest = dl.load_manifest(ROOT / "models" / "models.manifest.json")
+        all_models = dl.select_group_specs("all", manifest)
         compression = dl.select_group_specs("compression", manifest)
         decompression = dl.select_group_specs("decompression", manifest)
 
+        self.assertEqual(
+            [spec.file for spec in all_models],
+            [
+                "MDV6-yolov9-c.pt",
+                "MDV6-yolov9-c.onnx",
+                "int16_bundle_v1.0.0.pt",
+                "amt-s.pth",
+                "amt-l.pth",
+            ],
+        )
         self.assertEqual(
             [spec.file for spec in compression],
             [
                 "MDV6-yolov9-c.pt",
                 "MDV6-yolov9-c.onnx",
-                "cvpr2025_image.pth.tar",
-                "cvpr2025_video.pth.tar",
+                "int16_bundle_v1.0.0.pt",
             ],
         )
         self.assertEqual(
             [spec.file for spec in decompression],
             [
-                "cvpr2025_image.pth.tar",
-                "cvpr2025_video.pth.tar",
+                "int16_bundle_v1.0.0.pt",
                 "amt-s.pth",
                 "amt-l.pth",
             ],
         )
 
-    def test_manifest_defaults_return_none_when_not_set(self) -> None:
+    def test_manifest_defaults_use_release_metadata(self) -> None:
         payload = dl.load_manifest_document(ROOT / "models" / "models.manifest.json")
-        self.assertIsNone(dl.manifest_default_repo_slug(payload))
-        self.assertIsNone(dl.manifest_default_release_tag(payload))
+        self.assertEqual(dl.manifest_default_repo_slug(payload), "imics-lab/neural-video-codec")
+        self.assertEqual(dl.manifest_default_release_tag(payload), "nevc-models")
 
     def test_infer_repo_slug_uses_origin_remote(self) -> None:
         with patch("subprocess.run") as run:

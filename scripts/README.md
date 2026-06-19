@@ -2,14 +2,21 @@
 
 ## download_models.py
 
-Downloads all required model checkpoints into `checkpoints/` and `models/`.
+Downloads all release-backed model files into `models/`.
 
 ```bash
 python scripts/download_models.py
 ```
 
-Downloads: DCVC I-frame model, DCVC P-frame model, MegaDetector (YOLOv9c),
-S3Diff weights, DEResNet degradation estimator.
+Downloads: MegaDetector YOLO weights, the deterministic `dcvc_int16` bundle,
+and AMT interpolation weights from the configured GitHub Release.
+
+For stage-specific downloads:
+
+```bash
+python scripts/download_compression_models.py
+python scripts/download_decompression_models.py
+```
 
 ## sanity_check.py
 
